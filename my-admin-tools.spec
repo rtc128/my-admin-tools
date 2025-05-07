@@ -1,0 +1,50 @@
+Name:           my-admin-tools
+Version:			 1.0.0
+Release:        1
+Summary:        Administration tools for MySQL
+
+BuildArch:      noarch
+License:			 GPL
+Source0:			 my-admin-tools.tar.gz
+
+%description
+Administration tools for MySQL:
+- Analyze all tables: my-analyze-all-tables
+- Drop all schemas: my-drop-all-schemas
+- Drop all tables: my-drop-all-tables
+- Drop all triggers: my-drop-all-trigger
+- Drop all users: my-drop-all-users
+- Kill blocking sessions: my-kill-blockers
+- Mirror a database (copy objects/schemas): my-mirror
+- Truncate all tables: my-truncate-all-tables
+
+%prep
+%setup -q
+%build
+%install
+install -d -m 0755 $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-analyze-all-tables $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-compare-count $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-compare-data $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-drop-all-schemas $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-drop-all-tables $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-drop-all-users $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-drop-all-triggers $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-flush-all-tables $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-kill-blockers $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-kill-long-transactions $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-kill-sessions $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-mirror $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-repl-skip-failed-transaction $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-replace-table $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-truncate-all-tables $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
+
+
+%files
+/usr/bin/
+
+%changelog
+
+* Wed May 7 2025 Rodrigo Tassinari 1.0.0
+- Initial release
