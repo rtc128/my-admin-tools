@@ -1,0 +1,135 @@
+#!/bin/bash
+
+set -e
+
+COMPARE_ROW_COUNT=3000
+MAX_COMPARE_ROWS_TABLE_SIZE=80000000
+
+function compare_rows()
+{
+	local TABLE_NAME=$1
+	local ROW_COUNT=$2
+
+	local START_ROW=
+	local RETRY=1
+	if [ $# -eq 3 ]; then
+		START_ROW=$3
+		RETRY=0
+	fi
+
+	local PK=`find_pk $TABLE_NAME` || return 0
+	if [ -z "$PK" ]; then
+		return
+	fi
+	local PK_COMMA_LIST=
+	local FIRST=1
+	for I in $PK; do
+		if [ $FIRST -eq 0 ]; then
+			PK_COMMA_LIST="$PK_COMMA_LIST, "
+		fi
+		FIRST=0
+
+		PK_COMMA_LIST="$PK_COMMA_LIST${I}"
+	done
+		
+	if [ -z "$START_ROW" ]; then
+		local RND=`od -An -N2 -i /dev/urandom`
+		START_ROW=$((RND % ROW_COUNT + 1))
+	fi
+
+	local LOCAL_DATA=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local REMOTE_DATA=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local QUERY="select * from $TABLE_NAME order by $PK_COMMA_LIST limit $START_ROW, $COMPARE_ROW_COUNT"
+	mysql -v -N -e "$QUERY" $SCHEMA >$LOCAL_DATA || return 0
+	mysql --login-path=$LOGIN_PATH -v -N -e "$QUERY" $SCHEMA >$REMOTE_DATA || return 0
+	local LOCAL_MD5=`md5sum $LOCAL_DATA | awk '{ print $1; }'`
+	local REMOTE_MD5=`md5sum $REMOTE_DATA | awk '{ print $1; }'`
+	if [ "$LOCAL_MD5" != "$REMOTE_MD5" ]; then
+		if [ $RETRY -eq 1 ]; then
+			sleep 5
+			compare_rows $TABLE_NAME $ROW_COUNT $START_ROW || return 1
+		else
+			echo "*** Found table $TABLE_NAME with different rows (first row: $START_ROW) ***"
+			cp $LOCAL_DATA $SCHEMA.$TABLE_NAME.local.txt
+			cp $REMOTE_DATA $SCHEMA.$TABLE_NAME.remote.txt
+		fi
+	fi
+	rm $LOCAL_DATA
+	rm $REMOTE_DATA
+}
+
+function find_pk()
+{
+	TABLE_NAME=$1
+	QUERY="select column_name from information_schema.columns where table_schema = '$SCHEMA' and table_name = '$TABLE_NAME' and column_key = 'PRI' order by ordinal_position"
+	mysql -N -e "$QUERY" || return 1
+}
+
+function list_tables()
+{
+	LIST_FILE=$1
+	QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE'"
+	mysql -N -e "$QUERY" >$LIST_FILE || return 1
+}
+
+function run()
+{
+	local CUSTOM_LIST_FILE=
+	while getopts "ht:" OPT; do
+		case $OPT in
+			h)
+				usage
+				return 0;;
+			t)
+				CUSTOM_LIST_FILE=$OPTARG;;
+			*)
+				echo "Unknown option '$OPT'" >&2
+				usage
+				return 1;;
+		esac
+	done
+	shift $((OPTIND-1))
+	if [ $# -ne 2 ]; then
+		usage
+		return 1
+	fi
+	LOGIN_PATH=$1
+	SCHEMA=$2
+
+	if [ -z "$CUSTOM_LIST_FILE" ]; then
+		LIST_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+		list_tables $LIST_FILE || return 1
+	else
+		LIST_FILE=$CUSTOM_LIST_FILE
+	fi
+	if ! [ -f $LIST_FILE ]; then
+		echo "No such file '$LIST_FILE'" >&2
+		return 1
+	fi
+	LINE_COUNT=`wc -l $LIST_FILE | awk '{ print $1; }'`
+	while true; do
+		LINE_NUM=`echo "($RANDOM % $LINE_COUNT) + 1" | bc`
+		TABLE=`head -n $LINE_NUM $LIST_FILE | tail -n 1`
+	
+		QUERY="select count(1) from $TABLE"
+		local COUNT=`mysql --login-path=$LOGIN_PATH -N -e "$QUERY" $SCHEMA` || return 1
+		if [ $COUNT -ne 0 ]; then
+			compare_rows $TABLE $COUNT || return 1
+		fi
+	done
+}
+
+function usage()
+{
+	echo "mysql-admin-tools: my-compare-data - Compare data between databases"
+	echo "This tool checks if two mysql databases have the same number of rows in their tables"
+	echo "Usage: $0 [ -h ] [ -t <table list file> ] <remote login path> <schema>"
+	echo "   -h: display this help"
+	echo "   -t: get list of tables from a file, instead of from database catalog"
+	echo "   remote login path: login path for comparision; this will be compared with instance in 'client' login path"
+	echo "   schema: the name of the schema to be compared"
+}
+
+run $*
+RC=$?
+exit $RC

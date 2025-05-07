@@ -1,0 +1,52 @@
+#!/bin/bash
+
+function usage()
+{
+	echo "my-admin-tools: my-analyze-all-tables - Analyze all tables in a schema"
+	echo "Usage: $0 [ -l <path> ] <schema>"
+	echo "	 -l: use login path <path>"
+	echo "			Default: 'client'"
+	echo "Credentials must be saved using 'mysql_config_editor'"
+}
+
+function generate_script()
+{
+	local SCRIPT=$1
+
+	QUERY="select concat('analyze table ', table_name, ';') from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE'"
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >>$SCRIPT || return 1
+}
+
+function run()
+{
+	LOGIN_PATH=client
+	while getopts "l:" opt; do
+		case $opt in
+			l)
+				LOGIN_PATH=$OPTARG;;
+			*)
+				echo "Unknown option '$opt'" >&2
+				usage
+				return 1;;
+		esac
+	done
+
+	shift $((OPTIND-1))
+
+	if [ $# -ne 1 ]; then
+		usage
+		return 1
+	fi
+	SCHEMA=$1
+
+	local SCRIPT=`mktemp /tmp/my-admin-tools.XXXXXX`
+	generate_script $SCRIPT || { rm $SCRIPT; return 1; }
+	mysql --login-path=$LOGIN_PATH -vvv $SCHEMA <$SCRIPT
+	local RC=$?
+	rm $SCRIPT
+	return $RC
+}
+
+run $*
+RC=$?
+exit $RC

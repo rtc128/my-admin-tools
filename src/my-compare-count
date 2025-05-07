@@ -1,0 +1,85 @@
+#!/bin/bash
+
+set -e
+
+function list_tables()
+{
+	LIST_FILE=$1
+	QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE'"
+	mysql -N -e "$QUERY" >$LIST_FILE || return 1
+}
+
+function run()
+{
+	local SEQUENTIAL=0
+	local CUSTOM_LIST_FILE=
+	while getopts "hst:" OPT; do
+		case $OPT in
+			h)
+				usage
+				return 0;;
+			s)
+				SEQUENTIAL=1;;
+			t)
+				CUSTOM_LIST_FILE=$OPTARG;;
+			*)
+				echo "Unknown option '$OPT'" >&2
+				usage
+				return 1;;
+		esac
+	done
+	shift $((OPTIND-1))
+	if [ $# -ne 2 ]; then
+		usage
+		return 1
+	fi
+	LOGIN_PATH=$1
+	SCHEMA=$2
+
+	if [ -z "$CUSTOM_LIST_FILE" ]; then
+		LIST_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+		list_tables $LIST_FILE || return 1
+	else
+		LIST_FILE=$CUSTOM_LIST_FILE
+	fi
+	if ! [ -f $LIST_FILE ]; then
+		echo "No such file '$LIST_FILE'" >&2
+		return 1
+	fi
+	LINE_COUNT=`wc -l $LIST_FILE | awk '{ print $1; }'`
+	LINE_NUM=1
+	while true; do
+		if [ $SEQUENTIAL -eq 0 ]; then
+			LINE_NUM=`echo "($RANDOM % $LINE_COUNT) + 1" | bc`
+		fi
+		TABLE=`head -n $LINE_NUM $LIST_FILE | tail -n 1`
+	
+		QUERY="select count(1) from $TABLE"
+		COUNT_LOCAL=`mysql -N -e "$QUERY" $SCHEMA` || return 1
+		COUNT_REMOTE=`mysql --login-path=$LOGIN_PATH -N -e "$QUERY" $SCHEMA` || return 1
+		if [ $COUNT_LOCAL -ne $COUNT_REMOTE ]; then
+			echo "*** Found table with different row counts: $TABLE (local: $COUNT_LOCAL; remote: $COUNT_REMOTE) ***"
+		fi
+		((LINE_NUM++))
+		if [ $SEQUENTIAL -eq 1 -a $LINE_NUM -gt $LINE_COUNT ]; then
+			break
+		fi
+	done
+}
+
+function usage()
+{
+	echo "mysql-admin-tools: my-compare-data - Compare data between databases"
+	echo "This tool checks if two mysql databases have the same number of rows in their tables"
+	echo "For every cycle, a random table is picked"
+	echo "Usage: $0 [ -h ] [ -s ] [ -t <table list file> ] <remote login path> <schema>"
+	echo "   -h: display this help"
+	echo "   -s: no random. check tables in order, and then quit"
+	echo "   -t: get list of tables from a file, instead of from database catalog"
+	echo "   remote login path: login path for comparision; this will be compared with instance in 'client' login path"
+	echo "   schema: the name of the schema to be compared"
+}
+
+run $*
+RC=$?
+exit $RC

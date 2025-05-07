@@ -1,0 +1,64 @@
+#!/bin/bash
+
+function confirm()
+{
+	if [ $ANSWER_YES -eq 1 ]; then
+		return 0
+	fi
+	echo -n "Are you sure you wanna drop all users and roles (you must type 'yes'): "
+	read ANSWER
+	[ "$ANSWER" == "yes" ] || return 1
+}
+
+function usage()
+{
+	echo "my-admin-tools: my-drop-all-users - Drop all users and roles in an instance"
+	echo "Usage: $0 [ -l <path> ] [ -y ]"
+	echo "   -l: use login path <path>"
+	echo "      Default: 'client'"
+	echo "  -y: assume yes to all questions"
+	echo "Credentials must be saved using 'mysql_config_editor'"
+}
+
+function generate_script()
+{
+	local SCRIPT=$1
+
+	QUERY="select concat('drop user \'', user, '\'@\'', host, '\';') as cmd from mysql.user where user != '' and user not like 'mysql.%' and concat(user, '@', host) != (select current_user()) and user not like 'AWS%' and user not like 'rds%'"
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$SCRIPT || return 1
+}
+
+function run()
+{
+	LOGIN_PATH=client
+	ANSWER_YES=0
+	while getopts "l:y" opt; do
+		case $opt in
+			l)
+				LOGIN_PATH=$OPTARG;;
+			y)
+				ANSWER_YES=1;;
+			*)
+				echo "Unknown option '$opt'" >&2
+				usage
+				return 1;;
+		esac
+	done
+
+	shift $((OPTIND-1))
+	if [ $# -ne 0 ]; then
+		usage
+		return 1
+	fi
+
+	confirm || return 1
+
+	local SCRIPT=`mktemp /tmp/my-admin-tools.XXXXXX`
+	generate_script $SCRIPT || { rm $SCRIPT; return 1; }
+	mysql --login-path=$LOGIN_PATH <$SCRIPT || return 1
+	rm $SCRIPT
+}
+
+run $*
+RC=$?
+exit $RC

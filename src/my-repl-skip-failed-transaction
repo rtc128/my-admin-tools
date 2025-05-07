@@ -1,0 +1,73 @@
+#!/bin/bash
+
+function run()
+{
+	local opt
+	while getopts "h" opt; do
+		case $opt in
+			h)
+				usage
+				return 0;;
+			*)
+				echo "Unrecognized option '$opt'" >&2
+				usage
+				return 1;;
+		esac
+	done
+	shift $((OPTIND-1))
+	if [ $# -ne 1 ]; then
+		usage
+		return 1
+	fi
+
+	#query applying transaction
+	QUERY="select applying_transaction from performance_schema.replication_applier_status_by_worker where last_error_number <> 0"
+	BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql -N -e "$QUERY" >$BUFF || { rm $BUFF; return 1; }
+	
+	#if no transaction found
+	COUNT=`cat $BUFF | wc -l`
+	if [ $COUNT -eq 0 ]; then
+		echo "Can't find a transaction in error"
+		rm $BUFF
+		return
+	fi
+
+	#if too many...
+	if [ $COUNT -gt 2 ]; then
+		echo "Too many transactions in error"
+		rm $BUFF
+		return
+	fi
+
+	GTID=`cat $BUFF`
+	rm $BUFF
+	skip $GTID
+	RC=$?
+	return $RC
+}
+
+function skip()
+{
+	local GTID=$1
+	BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	echo "set gtid_next='$GTID';" >>$BUFF
+	echo "begin;" >>$BUFF
+	echo "commit;" >>$BUFF
+	echo "set gtid_next='automatic';" >>$BUFF
+	mysql <$BUFF
+	RC=$?
+	rm $BUFF
+	return $RC
+}
+
+function usage()
+{
+	echo "my-repl-skip-failed-transaction - skip a transaction that is failing to be applied in a replica"
+	echo "Usage: $0"
+	echo "   No confirmation will be requestd"
+}
+
+run $?
+RC=$?
+exit $RC

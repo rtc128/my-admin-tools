@@ -1,0 +1,111 @@
+#!/bin/bash
+
+function mount_query()
+{
+	local FILTER QUERY
+
+	FILTER=
+	#filter by source host?
+	if [ -n "$SOURCE_HOST" ]; then
+		if [ -n "$FILTER" ]; then
+			FILTER="$FILTER and"
+		fi
+		FILTER="$FILTER (host = '$SOURCE_HOST' or host like '$SOURCE_HOST:%')"
+	fi
+
+	#filter by username?
+	if [ -n "$USERNAME" ]; then
+		if [ -n "$FILTER" ]; then
+			FILTER="$FILTER and"
+		fi
+		FILTER="$FILTER user = '$USERNAME'"
+	fi
+
+	#filter by min time?
+	if [ -n "$MIN_TIME" ]; then
+		if [ -n "$FILTER" ]; then
+			FILTER="$FILTER and"
+		fi
+		FILTER="$FILTER time > $MIN_TIME"
+	fi
+
+	#filter only active sessions?
+	if [ $ACTIVE -eq 1 ]; then
+		if [ -n "$FILTER" ]; then
+			FILTER="$FILTER and"
+		fi
+		FILTER="$FILTER command = 'query'"
+	fi
+
+	#exclude this own conn id
+	FILTER="$FILTER and id <> connection_id()"
+
+	QUERY="select concat('kill connection ', id, ';') as cmd from information_schema.processlist where $FILTER"
+	echo "$QUERY"
+}
+
+function run()
+{
+	local COUNT opt QUERY
+
+	ACTIVE=0
+	MIN_TIME=
+	SOURCE_HOST=
+	USERNAME=
+	LOGIN_PATH=client
+	while getopts "ahl:s:u:t:" opt; do
+		case $opt in
+			a)
+				ACTIVE=1;;
+			h)
+				usage
+				return 0;;
+			l)
+				LOGIN_PATH=$OPTARG;;
+			s)
+				SOURCE_HOST=$OPTARG;;
+			t)
+				MIN_TIME=$OPTARG;;
+			u)
+				USERNAME=$OPTARG;;
+			*)
+				echo "Unknown option '$opt'" >&2
+				usage
+				return 1;;
+			\?)
+				echo "Unknown option '$opt'" >&2
+				usage
+				return 1;;
+		esac
+	done
+
+	#src host or username is required
+	if [ -z "$SOURCE_HOST" -a -z "$USERNAME" ]; then
+		usage
+		return 1
+	fi
+
+	QUERY=`mount_query` || return 1
+	BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$BUFF || { rm $BUFF; return 1; }
+	COUNT=`cat $BUFF | wc -l`
+	mysql --login-path=$LOGIN_PATH -f <$BUFF 2>/dev/null
+	rm $BUFF
+	echo "$COUNT sessions"
+}
+
+function usage()
+{
+	echo "$0"
+	echo "A tool used to kill mysql sessions"
+	echo "Usage: $0 [ -h ] [ -a ] [ -l <login path> ] [ -s <source host> ] [ -u <username> ] [ -t <min time> ] "
+	echo "   -h: show this help and exit"
+	echo "   -a: kill only active sessions"
+	echo "   -l: change login path. Default: client."
+	echo "   -s: kill only sessions comming from 'source host'"
+	echo "   -t: kill only sessions in current state for 'min time' seconds"
+	echo "   -u: kill only sessions created by 'username'"
+	echo "   Source host or username is required"
+} 
+run $*
+exit $?

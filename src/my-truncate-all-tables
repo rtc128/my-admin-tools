@@ -1,0 +1,68 @@
+#!/bin/bash
+
+
+function usage()
+{
+  echo "my-admin-tools: truncate-all-my-tables - Used to truncate all tables in a schema"
+  echo "Usage: $0 [ -l <path> ] <schema>"
+  echo "   -l: use login path <path>"
+  echo "      Default: 'client'"
+  echo "Credentials must be saved using 'mysql_config_editor'"
+}
+
+
+function list_tables()
+{
+  QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE'"
+  mysql --login-path=$LOGIN_PATH -N -e "$QUERY" 2>/dev/null
+}
+
+function run()
+{
+  LOGIN_PATH=client
+  while getopts "l:" opt; do
+    case $opt in
+      l)
+        LOGIN_PATH=$OPTARG;;
+      *)
+        echo "Unknown option '$opt'" >&2
+        usage
+        return 1;;
+    esac
+  done
+
+  shift $((OPTIND-1))
+
+  if [ $# -ne 1 ]; then
+    usage
+    return 1
+  fi
+  SCHEMA=$1
+
+  LIST=`list_tables`
+
+  # Truncate table
+  for T in $LIST; do
+    QUERY="truncate table $SCHEMA.$T"
+    mysql --login-path=$LOGIN_PATH -N -e "$QUERY" 2>/dev/null
+  done
+
+   # Update statistics table
+  for S in $LIST; do
+    QUERY="analyze table $SCHEMA.$S"
+    mysql --login-path=$LOGIN_PATH -N -e "$QUERY" 2>/dev/null
+  done
+
+}
+
+function schema_exists()
+{
+  mysql --login-path=$LOGIN_PATH -N -e 'show databases' | grep ^$SCHEMA\$ >/dev/null
+}
+
+
+
+run $*
+RC=$?
+exit $RC
+

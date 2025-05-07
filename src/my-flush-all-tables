@@ -1,0 +1,37 @@
+#!/bin/bash
+
+function list_tables()
+{
+	QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE'"
+	mysql -N -e "$QUERY"
+}
+
+function run()
+{
+	if [ $# -ne 1 ]; then
+		usage
+		return 1
+	fi
+
+	SCHEMA=$1
+
+	LIST=`list_tables`
+	for T in $LIST; do
+		QUERY="flush table $SCHEMA.$T"
+		mysql -e "$QUERY" || return 1
+	done
+}
+
+function schema_exists()
+{
+	mysql -e 'show databases' | grep ^$SCHEMA\$ >/dev/null
+}
+
+function usage()
+{
+	echo "Usage: $0 <schema>"
+}
+
+run $*
+RC=$?
+exit $RC

@@ -1,0 +1,42 @@
+#!/bin/bash
+
+function usage()
+{
+	echo "my-admin-tools: my-unlock-users - unlock all users"
+	echo "Usage: $0 [ -l <path> ]"
+	echo "   -l: use login path <path>"
+	echo "      Default: 'client'"
+	echo "Credentials must be saved using 'mysql_config_editor'"
+}
+
+function run()
+{
+	LOGIN_PATH=client
+	while getopts "l:" opt; do
+		case $opt in
+			l)
+				LOGIN_PATH=$OPTARG;;
+			*)
+				echo "Unknown option '$opt'" >&2
+				usage
+				return 1;;
+		esac
+	done
+	shift $((OPTIND-1))
+	if [ $# -ne 0 ]; then
+		usage
+		return 1
+	fi
+
+	QUERY="select user from mysql.user where user <> substring_index(current_user(), '@', 1) and user not like 'mysql.%' and authentication_string <> '' and account_locked = 'Y'"
+	BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$BUFF || return 1
+	cat $BUFF
+	sed -i -e "s/\(.*\)/alter user '\1' account unlock\;/" $BUFF
+	mysql --login-path=$LOGIN_PATH <$BUFF || return 1
+	rm $BUFF
+}
+
+run $*
+RC=$?
+exit $RC

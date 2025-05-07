@@ -1,0 +1,51 @@
+#!/bin/bash
+
+shopt -s extglob
+function run()
+{
+	local LOGIN_PATH=client
+	while getopts "l:" OPT; do
+		case OPT in
+			*)
+				echo "Unknown option '$OPT'" >&2
+				usage
+				return 1;;
+		esac
+	done
+	shift $((OPTIND-1))
+	if [ $# -ne 1 ]; then
+		usage
+		return 1
+	fi
+
+	local TABLE=$1
+	echo "start transaction;"
+	echo "delete from $TABLE;"
+	local FIRST=1
+	BUFF=`mktemp /tmp/eproc-admin-tools.XXXXXX`
+	local ROW_COUNT=0
+	while IFS= read -r "LINE"; do
+		#skip titles
+		if [ $FIRST -eq 1 ]; then
+			FIRST=0
+			continue
+		fi
+		echo "$LINE" | sed -e "s/^/'/g" -e "s/\t/', '/g" -e "s/$/'/g" | sed -e "s/'NULL'/null/g" -e "s/''/null/g" | sed -e "s/\(.*\)/insert into $TABLE values (\1)\;/"
+	done
+	cat $BUFF
+	rm $BUFF
+	echo "commit;"
+}
+
+function usage()
+{
+	echo "my-admin-tools: my-replace-table - helps to replace the entire content of a table"
+	echo "CSV content is read from stdin. Fields must be separated by TAB."
+	echo "First line is ignored, so an admin can paste the entire content, including header. Replace SQL script is printed to stdout. Columns are not listed in INSERTs; so, they must be in the correct order."
+	echo "Usage: $0 <table>"
+	echo "   table: table to be replaced"
+}
+
+run $*
+RC=$?
+exit $RC
