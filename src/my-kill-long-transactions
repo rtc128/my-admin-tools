@@ -82,7 +82,8 @@ function usage()
 	if [ -n "$ERR" ]; then
 		echo "Error: $ERR" >&2
 	fi
-	echo "Usage: $0 [ -h ] [ -l <login path> ] [ -v ] <duration>"
+	echo "Usage: $0 [ -h ] [ -l <login path> ] [ -e <user> ] [ -v ] <duration>"
+	echo "   -e: Ignore sessions from user <user>. Can be used multiple times."
 	echo "   -l: use login path <login path>"
 	echo "      Default: client"
 	echo "   -h: Show this help"
