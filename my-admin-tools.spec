@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.0.0
+Version:			 1.0.1
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -15,6 +15,7 @@ Administration tools for MySQL:
 - Drop all triggers: my-drop-all-trigger
 - Drop all users: my-drop-all-users
 - Kill blocking sessions: my-kill-blockers
+- Kill sessions: my-kill-sessions
 - Mirror a database (copy objects/schemas): my-mirror
 - Truncate all tables: my-truncate-all-tables
 
@@ -45,6 +46,9 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/
 
 %changelog
+
+* Sun May 26 2025 Rodrigo Tassinari 1.0.1
+- my-kill-sessions: fix in command line parsing
 
 * Wed May 7 2025 Rodrigo Tassinari 1.0.0
 - Initial release
