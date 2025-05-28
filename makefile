@@ -10,7 +10,7 @@ rpm:
 	tar -C /tmp -c -z -f /tmp/my-admin-tools.tar.gz my-admin-tools-$(R)
 	mv /tmp/my-admin-tools.tar.gz ~/rpmbuild/SOURCES
 	cp my-admin-tools.spec ~/rpmbuild/SPECS
-	rpmbuild -bb ~/rpmbuild/SPECS/my-admin-tools.spec
+	rpmbuild --define "_target_os linux" -bb ~/rpmbuild/SPECS/my-admin-tools.spec
 	mkdir -p ~/rpm
 	rm -fr ~/rpm/*
 	mv ~/rpmbuild/RPMS/noarch/*.rpm ~/rpm

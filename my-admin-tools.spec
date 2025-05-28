@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.0.3
+Version:			 1.0.4
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -61,6 +61,9 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-unlock-users
 
 %changelog
+
+* Wed May 28 2025 Rodrigo Tassinari 1.0.4
+- New try to fix target OS in RPM
 
 * Wed May 28 2025 Rodrigo Tassinari 1.0.3
 - Fix in RPM package (file list)
