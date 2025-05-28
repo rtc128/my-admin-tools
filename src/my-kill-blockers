@@ -2,7 +2,7 @@
 
 set -e
 
-function kill_innodb_blockers()
+function kill_row_blockers()
 {
 	QUERY="select
 			w1.blocking_pid as pid,
@@ -50,7 +50,7 @@ function kill_innodb_blockers()
 	rm $OUT_BUFF
 }
 
-function kill_schema_table_blockers()
+function kill_metadata_blockers()
 {
 	QUERY="select
 			w1.blocking_pid,
@@ -104,8 +104,13 @@ function run()
 	EXEC_COUNT=1
 	INTERVAL=60
 	LOGIN_PATH=client
+	METADATA=1
+	ONLY_METADATA=0
+	ONLY_ROW=0
+	ROW=1
 	VERBOSE=0
-	while getopts ":hi:l:n:v" OPT; do
+
+	while getopts ":hi:l:mn:rv" OPT; do
 		case $OPT in
 			h)
 				usage
@@ -114,8 +119,14 @@ function run()
 				INTERVAL=$OPTARG;;
 			l)
 				LOGIN_PATH=$OPTARG;;
+			m)
+				ONLY_METADATA=1
+				ROW=0;;
 			n)
 				EXEC_COUNT=$OPTARG;;
+			r)
+				ONLY_ROW=1
+				METADATA=0;;
 			v)
 				VERBOSE=1;;
 			?)
@@ -134,11 +145,12 @@ function run()
 		return 1;
 	fi
 	MIN_TIME=$1
+
+	validate_params || return 1
 	LOG_DIR=/var/log/my-kill-blockers
 	mkdir -p $LOG_DIR || return 1
 	LOG_FILE=$LOG_DIR/$LOGIN_PATH.log
 
-	validate_params || return 1
 	mkdir -p "$WORKING_DIR" || return 1
 	LOCK_FILE_BASENAME=.$LOGIN_PATH.lock
 	LOCK_FILE=${WORKING_DIR}/$LOCK_FILE_BASENAME
@@ -152,8 +164,8 @@ function run()
 			return 0
 		fi
 		touch "$LOCK_FILE" || return 1
-		kill_innodb_blockers || { rm -f "$LOCK_FILE"; return 1; }
-		kill_schema_table_blockers || { rm -f "$LOCK_FILE"; return 1; }
+		[ $ROW -ne 1 ] || kill_row_blockers || { rm -f "$LOCK_FILE"; return 1; }
+		[ $METADATA -ne 1 ] || kill_metadata_blockers || { rm -f "$LOCK_FILE"; return 1; }
 		rm "$LOCK_FILE"
 	done
 }
@@ -161,21 +173,32 @@ function run()
 function validate_params()
 {
 	if [ $INTERVAL -lt 5 ]; then
-		echo "<interval> must be 5 or greater" >&2
+		echo "=== <interval> must be 5 or greater ===" >&2
+		echo
 		return 1
 	fi
 	if [ $INTERVAL -gt 600 ]; then
-		echo "<interval> must be 600 or lower" >&2
+		echo "=== <interval> must be 600 or lower ===" >&2
+		echo
 		return 1
 	fi
 
 	#count
 	if [ $EXEC_COUNT -lt 1 ]; then
-		echo "<interval> must be 1 or greater" >&2
+		echo "=== <interval> must be 1 or greater ===" >&2
+		echo
 		return 1
 	fi
 	if [ $EXEC_COUNT -gt 200 ]; then
 		echo "<interval> must be 200 or lower" >&2
+		return 1
+	fi
+
+	#options for only metadata and for only row locks can't be set together
+	if [ $ONLY_METADATA -eq 1 -a $ONLY_ROW -eq 1 ]; then
+		echo "=== Options -m and -r can't be used together. If you wish to search for both row and metadata locks, please remove both options. ===" >&2
+		echo
+		usage
 		return 1
 	fi
 }
@@ -184,23 +207,28 @@ function usage()
 {
 	ERR="$1"
 	echo "my-kill-blockers"
-	echo "Tool that kills sessions that are blocking other sessions in mysql database"
+	echo "Tool that kills sessions that are blocking other sessions in mysql database."
+	echo "By default, both types of lock are searched: row and metadata."
 	echo "Operation log is printed to /var/log/my-kill-blockers/<login path>.log"
 	if [ -n "$ERR" ]; then
 		echo "Error: $ERR" >&2
 	fi
-	echo "Usage: $0 [ -i <interval> ] [ -h ] [ -l <login path> ] [ -n <count> ] [ -v ] <time>"
+	echo "Usage: $0 [ -h ] [ -i <interval> ] [ -l <login path> ] [ -m ] [ -n <count> ] [ -v ] <time>"
+	echo "   -h: Show this help"
 	echo "   -i: Set the interval between executions to <interval> seconds."
 	echo "      Default: 60"
 	echo "      Min: 5"
 	echo "      Max: 600"
 	echo "   -l: use login path <login path>"
 	echo "      Default: client"
+	echo "   -m: Only search for table metadata locks"
+	echo "      Can't be used with -r"
 	echo "   -n: Set the number of executions to <count>."
 	echo "      Default: 1"
 	echo "      Min: 1"
 	echo "      Max: 200"
-	echo "   -h: Show this help"
+	echo "   -r: Only search for row locks"
+	echo "      Can't be used with -m"
 	echo "   -v: Verbose mode - print output to stdout, beside log file"
 	echo "   time: min wait time (kill only if there's a session waiting for <time> or more seconds)"
 }
