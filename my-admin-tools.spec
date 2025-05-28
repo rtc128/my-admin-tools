@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.0.2
+Version:			 1.0.3
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -43,9 +43,27 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 
 
 %files
-/usr/bin/
+/usr/bin/my-analyze-all-tables
+/usr/bin/my-compare-count
+/usr/bin/my-compare-data
+/usr/bin/my-drop-all-schemas
+/usr/bin/my-drop-all-tables
+/usr/bin/my-drop-all-users
+/usr/bin/my-drop-all-triggers
+/usr/bin/my-flush-all-tables
+/usr/bin/my-kill-blockers
+/usr/bin/my-kill-long-transactions
+/usr/bin/my-kill-sessions
+/usr/bin/my-mirror
+/usr/bin/my-repl-skip-failed-transaction
+/usr/bin/my-replace-table
+/usr/bin/my-truncate-all-tables
+/usr/bin/my-unlock-users
 
 %changelog
+
+* Wed May 28 2025 Rodrigo Tassinari 1.0.3
+- Fix in RPM package (file list)
 
 * Wed May 28 2025 Rodrigo Tassinari 1.0.2
 - my-kill-blockers: added options to choose a specific type of lock
