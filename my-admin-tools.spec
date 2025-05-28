@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.0.1
+Version:			 1.0.2
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -47,7 +47,10 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 
 %changelog
 
-* Sun May 26 2025 Rodrigo Tassinari 1.0.1
+* Wed May 28 2025 Rodrigo Tassinari 1.0.2
+- my-kill-blockers: added options to choose a specific type of lock
+
+* Mon May 26 2025 Rodrigo Tassinari 1.0.1
 - my-kill-sessions: fix in command line parsing
 
 * Wed May 7 2025 Rodrigo Tassinari 1.0.0
