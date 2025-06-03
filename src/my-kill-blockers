@@ -14,7 +14,7 @@ function kill_row_blockers()
 			join information_schema.processlist p on w1.blocking_pid = p.id
 		where
 			p.user <> 'root' and
-			w1.wait_age_secs >= $MIN_TIME and
+			w1.wait_age_secs + 10800 >= $MIN_TIME and
 			not exists (select 1 from sys.innodb_lock_waits w2 where w2.waiting_pid = w1.blocking_pid)
 		order by
 			w1.blocking_pid"
@@ -105,12 +105,13 @@ function run()
 	INTERVAL=60
 	LOGIN_PATH=client
 	METADATA=1
+	MIN_SESSIONS=0
 	ONLY_METADATA=0
 	ONLY_ROW=0
 	ROW=1
 	VERBOSE=0
 
-	while getopts ":hi:l:mn:rv" OPT; do
+	while getopts ":hi:l:mn:rs:v" OPT; do
 		case $OPT in
 			h)
 				usage
@@ -127,6 +128,8 @@ function run()
 			r)
 				ONLY_ROW=1
 				METADATA=0;;
+			s)
+				MIN_SESSIONS=$OPTARG;;
 			v)
 				VERBOSE=1;;
 			?)
@@ -147,6 +150,7 @@ function run()
 	MIN_TIME=$1
 
 	validate_params || return 1
+
 	LOG_DIR=/var/log/my-kill-blockers
 	mkdir -p $LOG_DIR || return 1
 	LOG_FILE=$LOG_DIR/$LOGIN_PATH.log
@@ -154,19 +158,43 @@ function run()
 	mkdir -p "$WORKING_DIR" || return 1
 	LOCK_FILE_BASENAME=.$LOGIN_PATH.lock
 	LOCK_FILE=${WORKING_DIR}/$LOCK_FILE_BASENAME
-	#consider stale lock file if it is more than 1d old
-	find $WORKING_DIR -name $LOCK_FILE_BASENAME -type f -mtime +1 -exec rm {} \;
 
+	local NOW=`date +%s`
+	local LIMIT_TIME=$((NOW+EXEC_COUNT*INTERVAL))
 	for I in `seq 1 $EXEC_COUNT`; do
 		[ $I -eq 1 ] || sleep $INTERVAL
+		#consider stale lock file if it is more than 2min old
+		find $WORKING_DIR -name $LOCK_FILE_BASENAME -type f -cmin 2 -exec rm {} \;
 		if [ -f "$LOCK_FILE" ]; then
 			write_out "Lock file exists - do you have another instance running?"
-			return 0
+			continue
 		fi
 		touch "$LOCK_FILE" || return 1
+
+		#if filtered for session count, check locks only if session count is beyond limit
+		if [ $MIN_SESSIONS -gt 0 ]; then
+			local COUNT=`mysql --login-path=$LOGIN_PATH -N -e "show status like 'threads_running'" | awk '{ print $2; }'`
+			if [ -z "$COUNT" ]; then
+				rm -f "$LOCK_FILE"
+				return 1
+			fi
+			if [ $COUNT -lt $MIN_SESSIONS ]; then
+				rm "$LOCK_FILE"
+				continue
+			fi
+		fi
+
+		write_out "Checking locks"
 		[ $ROW -ne 1 ] || kill_row_blockers || { rm -f "$LOCK_FILE"; return 1; }
 		[ $METADATA -ne 1 ] || kill_metadata_blockers || { rm -f "$LOCK_FILE"; return 1; }
+		write_out "Finished"
 		rm "$LOCK_FILE"
+
+		#check if there's enough time to run once again
+		NOW=`date +%s`
+		if [ $((NOW+INTERVAL)) -ge $LIMIT_TIME ]; then
+			break
+		fi
 	done
 }
 
@@ -206,14 +234,14 @@ function validate_params()
 function usage()
 {
 	ERR="$1"
-	echo "my-kill-blockers"
-	echo "Tool that kills sessions that are blocking other sessions in mysql database."
+	echo "=== my-admin-tools ==="
+	echo "my-kill-blockers - Tool to kill sessions that are blocking other sessions."
 	echo "By default, both types of lock are searched: row and metadata."
 	echo "Operation log is printed to /var/log/my-kill-blockers/<login path>.log"
 	if [ -n "$ERR" ]; then
 		echo "Error: $ERR" >&2
 	fi
-	echo "Usage: $0 [ -h ] [ -i <interval> ] [ -l <login path> ] [ -m ] [ -n <count> ] [ -v ] <time>"
+	echo "Usage: $0 [ -h ] [ -i <interval> ] [ -l <login path> ] [ -m ] [ -n <count> ] [ -s <count> [ -v ] <time>"
 	echo "   -h: Show this help"
 	echo "   -i: Set the interval between executions to <interval> seconds."
 	echo "      Default: 60"
@@ -229,6 +257,7 @@ function usage()
 	echo "      Max: 200"
 	echo "   -r: Only search for row locks"
 	echo "      Can't be used with -m"
+	echo "   -s: Search for locks only if there are at least <count> active sessions"
 	echo "   -v: Verbose mode - print output to stdout, beside log file"
 	echo "   time: min wait time (kill only if there's a session waiting for <time> or more seconds)"
 }
