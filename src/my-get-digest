@@ -1,0 +1,20 @@
+#!/bin/bash
+
+if [ $# -ne 1 ]; then
+	echo "=== my-admin-tools ==="
+	echo "my-get-digest -- Calculate a statemet digest in mysql"
+	echo "Usage: $0 <schema>"
+	echo "   schema: database schema name"
+	exit
+fi
+
+SCHEMA=$1
+echo "Enter your query [do not add a semicolon (';')]. You can use many lines. When done, press CTRL+D:"
+TMP_SQL=`mktemp /tmp/sql.XXXXXX`
+echo "select statement_digest(\"" >$TMP_SQL
+while read LINE; do
+	echo "$LINE" >>$TMP_SQL
+done
+echo \"\) >>$TMP_SQL
+mysql -N $SCHEMA <$TMP_SQL
+rm $TMP_SQL
