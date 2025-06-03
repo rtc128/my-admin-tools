@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.0.4
+Version:			 1.0.5
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -32,6 +32,7 @@ install -m 0755 src/my-drop-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-users $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-triggers $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-flush-all-tables $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-get-digest $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-kill-blockers $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-kill-long-transactions $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-kill-sessions $RPM_BUILD_ROOT/usr/bin
@@ -51,6 +52,7 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-drop-all-users
 /usr/bin/my-drop-all-triggers
 /usr/bin/my-flush-all-tables
+/usr/bin/my-get-digest
 /usr/bin/my-kill-blockers
 /usr/bin/my-kill-long-transactions
 /usr/bin/my-kill-sessions
@@ -61,6 +63,9 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-unlock-users
 
 %changelog
+
+* Tue Jun 03 2025 Rodrigo Tassinari 1.0.5
+- New tool: my-get-digest
 
 * Wed May 28 2025 Rodrigo Tassinari 1.0.4
 - New try to fix target OS in RPM
