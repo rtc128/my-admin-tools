@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.0.6
+Version:			 1.0.7
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -63,6 +63,9 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-unlock-users
 
 %changelog
+
+* Tue Jun 10 2025 Rodrigo Tassinari 1.0.7
+- my-mirror: when retrying to copy a table, use the same command, because in first attempt, it's not surely created
 
 * Tue Jun 03 2025 Rodrigo Tassinari 1.0.6
 - my-kill-blockers: support for active session count filtering
