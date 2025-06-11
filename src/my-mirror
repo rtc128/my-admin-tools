@@ -853,10 +853,16 @@ function table_exists()
 
 function th_main()
 {
-	local L_TABLE
-
-	L_TABLE=`get_next_table`
+	local FIRST=1
+	local L_TABLE=`get_next_table`
 	while [ -n "$L_TABLE" ]; do
+		#for the first table, sleep between 101ms and 1s, to avoid deadlock
+		if [ $FIRST -eq 1 ]; then
+			FIRST=0
+			local MSEC=$((RANDOM%900+101))
+			local USEC=$((MSEC*1000))
+			usleep $USEC
+		fi
 		local INTERVAL=`echo $L_TABLE | cut -d : -f 2`
 		if [ "$INTERVAL" != "$L_TABLE" ]; then
 			local L_TABLE_ONLY=`echo $L_TABLE | cut -d : -f 1`
