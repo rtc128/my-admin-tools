@@ -2,6 +2,8 @@
 
 set -e
 
+CONNECT_TIMEOUT=3
+
 function kill_row_blockers()
 {
 	QUERY="select
@@ -20,7 +22,7 @@ function kill_row_blockers()
 			w1.blocking_pid"
 	OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
 	ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUT_BUFF 2>$ERR_BUFF
+	mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -N -e "$QUERY" >$OUT_BUFF 2>$ERR_BUFF
 	RC=$?
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
@@ -45,7 +47,7 @@ function kill_row_blockers()
 		write_out "PID: $PID, User: $USER, Host: $HOST, Table: $TABLE_NAME [INNODB LOCK]"
 
 		CMD="kill connection $PID"
-		mysql --login-path=$LOGIN_PATH -e "$CMD" >/dev/null 2>&1
+		mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -e "$CMD" >/dev/null 2>&1
 	done <$OUT_BUFF
 	rm $OUT_BUFF
 }
@@ -68,7 +70,7 @@ function kill_metadata_blockers()
 			w1.blocking_pid"
 	OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
 	ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUT_BUFF 2>$ERR_BUFF
+	mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -N -e "$QUERY" >$OUT_BUFF 2>$ERR_BUFF
 	RC=$?
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
@@ -93,7 +95,7 @@ function kill_metadata_blockers()
 		write_out "PID: $PID, User: $USER, Host: $HOST, Object: $TABLE_NAME [SCHEMA TABLE LOCK]"
 
 		CMD="kill connection $PID"
-		mysql --login-path=$LOGIN_PATH -e "$CMD" >/dev/null 2>&1
+		mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -e "$CMD" >/dev/null 2>&1
 	done <$OUT_BUFF
 	rm $OUT_BUFF
 }
@@ -162,6 +164,12 @@ function run()
 	local NOW=`date +%s`
 	local LIMIT_TIME=$((NOW+EXEC_COUNT*INTERVAL))
 	for I in `seq 1 $EXEC_COUNT`; do
+		#check if there's enough time to run once again
+		NOW=`date +%s`
+		if [ $((NOW+INTERVAL)) -ge $LIMIT_TIME ]; then
+			break
+		fi
+
 		[ $I -eq 1 ] || sleep $INTERVAL
 		#consider stale lock file if it is more than 2min old
 		find $WORKING_DIR -name $LOCK_FILE_BASENAME -type f -cmin 2 -exec rm {} \;
@@ -173,28 +181,25 @@ function run()
 
 		#if filtered for session count, check locks only if session count is beyond limit
 		if [ $MIN_SESSIONS -gt 0 ]; then
-			local COUNT=`mysql --login-path=$LOGIN_PATH -N -e "show status like 'threads_running'" | awk '{ print $2; }'`
+			local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+			local COUNT=`mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -N -e "show status like 'threads_running'" 2>$ERR_BUFF | awk '{ print $2; }'`
+			write_file_out $ERR_BUFF
+			rm $ERR_BUFF
 			if [ -z "$COUNT" ]; then
 				rm -f "$LOCK_FILE"
-				return 1
+				continue
 			fi
 			if [ $COUNT -lt $MIN_SESSIONS ]; then
 				rm "$LOCK_FILE"
 				continue
 			fi
 		fi
-
 		write_out "Checking locks"
 		[ $ROW -ne 1 ] || kill_row_blockers || { rm -f "$LOCK_FILE"; return 1; }
 		[ $METADATA -ne 1 ] || kill_metadata_blockers || { rm -f "$LOCK_FILE"; return 1; }
 		write_out "Finished"
 		rm "$LOCK_FILE"
 
-		#check if there's enough time to run once again
-		NOW=`date +%s`
-		if [ $((NOW+INTERVAL)) -ge $LIMIT_TIME ]; then
-			break
-		fi
 	done
 }
 
@@ -268,19 +273,14 @@ function write_file_out()
 	SIZE=`stat -c %s "$F"`
 	[ $SIZE -ne 0 ] || return 0
 	local CUR_TIMESTAMP=`date +%Y-%m-%d_%T`
-	local LINE="[$CUR_TIMESTAMP $$] $MSG"
 	if [ $VERBOSE -eq 1 ]; then
-		echo "$CUR_TIMESTAMP"
+		echo "[$CUR_TIMESTAMP $$]"
 	fi
-	echo "$CUR_TIMESTAMP" >>$LOG_FILE
-	echo "======================================="
-	echo "=======================================" >>$LOG_FILE
+	echo "[$CUR_TIMESTAMP $$]" >>$LOG_FILE
 	if [ $VERBOSE -eq 1 ]; then
 		cat "$F"
 	fi
 	cat "$F" >>$LOG_FILE
-	echo "======================================="
-	echo "=======================================" >>$LOG_FILE
 }
 
 function write_out()
