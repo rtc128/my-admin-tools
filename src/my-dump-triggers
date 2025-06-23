@@ -7,8 +7,9 @@ function usage()
 	echo "   -l: use login path <path>"
 	echo "      Default: 'client'"
 	echo "Credentials must be saved using 'mysql_config_editor'."
-	echo "Triggers are read from stdin."
+	echo "Triggers are read from stdin (one line per trigger)."
 	echo "Script in printed in stdout."
+	echo "Example: my-dump-triggers sakila </tmp/trigger_list"
 }
 
 function run()
