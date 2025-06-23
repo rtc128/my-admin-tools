@@ -1,0 +1,52 @@
+#!/bin/bash
+
+function usage()
+{
+	echo "my-admin-tools: my-dump-triggers - dump all triggers in a schema"
+	echo "Usage: $0 [ -l <path> ] <schema>"
+	echo "   -l: use login path <path>"
+	echo "      Default: 'client'"
+	echo "Credentials must be saved using 'mysql_config_editor'."
+	echo "Triggers are read from stdin."
+	echo "Script in printed in stdout."
+}
+
+function run()
+{
+	LOGIN_PATH=client
+	while getopts "l:" opt; do
+		case $opt in
+			l)
+				LOGIN_PATH=$OPTARG;;
+			*)
+				echo "Unknown option '$opt'" >&2
+				usage
+				return 1;;
+		esac
+	done
+	shift $((OPTIND-1))
+	if [ $# -ne 1 ]; then
+		usage
+		return 1
+	fi
+	SCHEMA=$1
+
+	local TRIGGER
+	local SQL_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	echo 'delimiter $$' >$SQL_BUFF
+	while read TRIGGER; do
+		QUERY="show create trigger $TRIGGER"
+		mysql --login-path=$LOGIN_PATH -N -e "$QUERY" $SCHEMA >$BUFF || { rm $SQL_BUFF $BUFF; return 1; }
+		#cat $BUFF
+		awk -F '\t' '{ print $3; }' $BUFF | sed -e 's/\\n/\n/g' -e 's/\\t/\t/g' >>$SQL_BUFF
+		echo '$$' >>$SQL_BUFF
+	done
+	cat $SQL_BUFF
+	rm $BUFF $SQL_BUFF
+	return 0
+}
+
+run $*
+RC=$?
+exit $RC
