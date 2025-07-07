@@ -10,7 +10,7 @@ function kill_row_blockers()
 			w1.blocking_pid as pid,
 			p.user,
 			p.host,
-			w1.locked_table_name
+			concat(w1.locked_table_schema, '.', w1.locked_table_name) as locked_table_name
 		from
 			sys.innodb_lock_waits w1
 			join information_schema.processlist p on w1.blocking_pid = p.id
