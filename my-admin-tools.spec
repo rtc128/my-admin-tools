@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.1.0
+Version:			 1.1.1
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -63,6 +63,10 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-unlock-users
 
 %changelog
+
+* Mon Jul 7 2025 Rodrigo Tassinari 1.1.1
+- my-kill-blockers: Log fully-qualified table name
+- my-mirror: Minor fix in SLEEP call
 
 * Mon Jun 23 2025 Rodrigo Tassinari 1.1.0
 - New tool: my-dump-triggers
