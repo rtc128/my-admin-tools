@@ -1,7 +1,6 @@
 R = $(shell cat RELEASE)
 
 rpm:
-	#rpmdev-setuptree
 	mkdir -p ~/rpmbuild/BUILDROOT
 	mkdir -p ~/rpmbuild/SOURCES
 	mkdir -p ~/rpmbuild/SPECS

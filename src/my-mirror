@@ -860,8 +860,8 @@ function th_main()
 		if [ $FIRST -eq 1 ]; then
 			FIRST=0
 			local MSEC=$((RANDOM%900+101))
-			local USEC=$((MSEC*1000))
-			usleep $USEC
+			local SEC=`echo scale=3\;$MSEC/1000 | bc`
+			sleep $SEC
 		fi
 		local INTERVAL=`echo $L_TABLE | cut -d : -f 2`
 		if [ "$INTERVAL" != "$L_TABLE" ]; then
