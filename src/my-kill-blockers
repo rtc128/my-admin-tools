@@ -44,7 +44,7 @@ function kill_row_blockers()
 		HOST=`echo $LINE | awk '{print $3;}'`
 		TABLE_NAME=`echo $LINE | awk '{print $4;}'`
 
-		write_out "PID: $PID, User: $USER, Host: $HOST, Table: $TABLE_NAME [INNODB LOCK]"
+		write_out "PID: $PID, User: $USER, Host: $HOST, Table: $TABLE_NAME [ROW LOCK]"
 
 		CMD="kill connection $PID"
 		mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -e "$CMD" >/dev/null 2>&1
@@ -166,7 +166,7 @@ function run()
 	for I in `seq 1 $EXEC_COUNT`; do
 		#check if there's enough time to run once again
 		NOW=`date +%s`
-		if [ $((NOW+INTERVAL)) -ge $LIMIT_TIME ]; then
+		if [ $I -gt 1 -a $((NOW+INTERVAL)) -ge $LIMIT_TIME ]; then
 			break
 		fi
 
