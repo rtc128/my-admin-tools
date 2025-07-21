@@ -1,7 +1,7 @@
 #!/bin/bash
 
-MAX_RETRY_COUNT=3
-RETRY_INTERVAL=5
+MAX_RETRY_COUNT=5
+RETRY_INTERVAL=10
 
 if [ "$DEBUG" == "1" ]; then
    set -xv
@@ -10,8 +10,8 @@ fi
 function copy_all_grants()
 {
 	local QUERY="select user, host from mysql.user where user != '' and user not like 'mysql.%' and concat(user, '@', host) != (select current_user()) and user not like 'AWS%' and user not like 'rds%'"
-	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	mysql --login-path=$SRC -N -e "$QUERY" >$OUT_BUFF || { rm $OUT_BUFF; return 1; }
 
 	while read -r LINE; do
@@ -26,8 +26,8 @@ function copy_all_grants()
 
 function copy_all_schemas()
 {
-	local OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	list_schemas >$OUT_BUFF
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	list_schemas "$OUT_BUFF"
 	RC=$?
 	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
 	local LIST=`cat $OUT_BUFF`
@@ -47,11 +47,14 @@ function copy_events()
 
 function copy_aws()
 {
-	SCHEMA_LIST=`mktemp /tmp/my-admin-tools.XXXXXX`
-	list_schemas >$SCHEMA_LIST
+	SCHEMA_LIST=`mktemp /tmp/my-mirror.XXXXXX`
+	list_schemas "$SCHEMA_LIST" || { rm $SCHEMA_LIST; return 1; }
+
 	if [ $FINISH_MODE -eq 0 ]; then
-		write_out "*** Copying structure from AWS RDS"
-		copy_aws_startup || { rm $SCHEMA_LIST; return 1; }
+		if [ $AWS_SKIP_TO_DATA -eq 0 ]; then
+			write_out "*** Copying structure from AWS RDS"
+			copy_aws_startup || { rm $SCHEMA_LIST; return 1; }
+		fi
 	else
 		write_out "*** Copying structure from AWS RDS (finish stage)"
 		copy_aws_finish || { rm $SCHEMA_LIST; return 1; }
@@ -80,20 +83,16 @@ function copy_aws_startup()
 
 	CREATE_TABLES=0
 	RC=$?
-	[ $RC -eq 0 ] || { rm $SCHEMA_LIST; return 1; }
+	[ $RC -eq 0 ] || return 1
 
-	create_all_schemas || { rm $SCHEMA_LIST; return 1; }
-	copy_full_tables || { rm $SCHEMA_LIST; return 1; }
-	drop_virtual_columns || { rm $SCHEMA_LIST; return 1; }
-
-	#REMOVER
-	#return 0
-
-	copy_all_users || { rm $SCHEMA_LIST; return 1; }
+	create_all_schemas || return 1
+	copy_full_tables || return 1
+	drop_virtual_columns || return 1
+	copy_all_users || return 1
 	copy_schema_grants || return 1
 	copy_table_grants || return 1
 	copy_full_views || return 1
-	copy_full_routines || { rm $SCHEMA_LIST; return 1; }
+	copy_full_routines || return 1
 	copy_full_grants || return 1
 	copy_full_events || return 1
 	return 0
@@ -126,16 +125,21 @@ function copy_full_grants()
 {
 	write_out "Adding all privileges"
 	local QUERY="select user, host from mysql.user where user != '' and user not like 'mysql.%' and concat(user, '@', host) != (select current_user()) and user not like 'AWS%' and user not like 'rds%'"
-	local BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF || { rm $BUFF; return 1; }
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	mysql --login-path=$SRC -N -e "$QUERY" >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
 
 	while read -r LINE; do
 		local USER=`echo $LINE | cut -d \  -f 1`
 		local HOST=`echo $LINE | cut -d \  -f 2`
 		local FQ_USER=\`$USER\`@\`$HOST\`
-		copy_grants $FQ_USER || return 1
-	done <$BUFF
-	rm $BUFF
+		copy_grants $FQ_USER || { rm $OUT_BUFF; return 1; }
+	done <$OUT_BUFF
+	rm $OUT_BUFF
 }
 
 function copy_full_routines()
@@ -150,17 +154,30 @@ function copy_full_routines()
 function copy_full_tables()
 {
 	local SCHEMA 
-	local VIEW_LIST=`mktemp /tmp/my-admin-tools.XXXXXX`
 	write_out "Creating tables"
 	for SCHEMA in `cat $SCHEMA_LIST`; do
+		local VIEW_LIST=`mktemp /tmp/my-mirror.XXXXXX`
 		local VIEW_OPT=
 		list_views $SCHEMA >$VIEW_LIST || { rm $VIEW_LIST; return 1; }
 		for V in `cat $VIEW_LIST`; do
 			VIEW_OPT="$VIEW_OPT --ignore-table=$SCHEMA.$V"
 		done
-		mysqldump --login-path=$SRC --set-gtid-purged=off $VIEW_OPT --max-allowed-packet=32M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA | sed -e 's/^CREATE TABLE /CREATE TABLE IF NOT EXISTS /' | mysql --login-path=$DST $SCHEMA || { rm $VIEW_LIST; return 1; }
+		rm $VIEW_LIST
+		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		local SQL_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		mysqldump --login-path=$SRC --set-gtid-purged=off $VIEW_OPT --max-allowed-packet=32M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA >$SQL_BUFF 2>$ERR_BUFF
+		local RC=$?
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || { rm $SQL_BUFF; return 1; }
+		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		sed -e 's/^CREATE TABLE /CREATE TABLE IF NOT EXISTS /' $SQL_BUFF | mysql --login-path=$DST $SCHEMA 2>$ERR_BUFF
+		local RC=$?
+		rm $SQL_BUFF
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || return 1
 	done
-	rm $VIEW_LIST
 	return 0
 }
 
@@ -208,7 +225,6 @@ function copy_routines()
 
 function copy_tables()
 {
-	CANCEL=0
 	if [ $COPY_CUSTOM_TABLES -eq 0 ]; then
 		write_out "*** Copying tables [$SCHEMA]"
 		list_tables || return 1
@@ -222,6 +238,8 @@ function copy_tables()
 	done
 	wait
 	rm $LOCK_FILE
+	local CANCEL=`cat $CANCEL_FILE`
+	return $CANCEL
 }
 
 function copy_triggers()
@@ -308,7 +326,7 @@ function copy_views()
 function copy_virtual_columns()
 {
 	write_out "Creating virtual columns"
-	local BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	local QUERY="select table_schema, table_name, column_name from information_schema.columns where table_schema <> 'mysql' and extra = 'VIRTUAL GENERATED'"
 	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF
 	while read -r LINE; do
@@ -325,8 +343,13 @@ function create_all_schemas()
 	local SCHEMA 
 	write_out "Creating schemas"
 	for SCHEMA in `cat $SCHEMA_LIST`; do
-		QUERY="create schema if not exists $SCHEMA"
-		mysql --login-path=$DST -e "$QUERY" || return 1
+		local QUERY="create schema if not exists $SCHEMA"
+		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX` || return 1
+		mysql --login-path=$DST -e "$QUERY" 2>$ERR_BUFF 
+		RC=$?
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || return 1
 	done
 	return 0
 }
@@ -338,14 +361,14 @@ function create_table_if_not_exists()
 	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	mysqldump --login-path=$SRC --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables $SCHEMA $TABLE | sed -e "s/^CREATE TABLE /CREATE TABLE IF NOT EXISTS /">$SPOOL 2>$ERR_BUFF
 	RC=$?
-	cat $ERR_BUFF
+	write_file_out $ERR_BUFF
 	if [ $RC -ne 0 ]; then
 		rm $SPOOL $ERR_BUFF
 		return 1
 	fi
 	mysql --login-path=$DST $SCHEMA <$SPOOL 2>$ERR_BUFF
 	RC=$?
-	cat $ERR_BUFF
+	write_file_out $ERR_BUFF
 	rm $ERR_BUFF $SPOOL
 	return $RC
 }
@@ -365,10 +388,9 @@ function drop_all_triggers()
 	ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	TRIGGER_LIST=`mysql --login-path=$DST -N -e "$QUERY" 2>$ERR_BUFF`
 	RC=$?
-	ERR_DESC=`cat $ERR_BUFF`
+	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
 	if [ $RC -ne 0 ]; then
-		write_out "Table $UTABLE: cannot list triggers\n   $ERR_DESC"
 		return 1
 	fi
 
@@ -377,9 +399,9 @@ function drop_all_triggers()
 		QUERY="drop trigger $TRIGGER"
 		mysql --login-path=$DST -e "$QUERY" $SCHEMA 2>$ERR_BUFF
 		RC=$?
+		write_file_out $ERR_BUFF
 		if [ $RC -ne 0 ]; then
-			ERR_DESC=`cat $ERR_BUFF`
-			write_out "Table $UTABLE: cannot drop trigger $UTRIGGER\n   $ERR_DESC"
+			write_out "Table $UTABLE: cannot drop trigger $UTRIGGER"
 			rm $ERR_BUFF
 			return 1
 		fi
@@ -414,16 +436,15 @@ function get_next_table()
 
 function list_schemas()
 {
+	write_out "Listing schemas"
+	local OUT_FILE="$1"
 	local QUERY="select schema_name from information_schema.schemata where schema_name not in ('mysql', 'information_schema', 'performance_schema', 'sys')"
-	local OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	mysql --login-path=$SRC -N -e "$QUERY" >$OUT_BUFF 2>$ERR_BUFF
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	mysql --login-path=$SRC -N -e "$QUERY" >$OUT_FILE 2>$ERR_BUFF
 	local RC=$?
-	cat $ERR_BUFF >&2
+	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
-	cat $OUT_BUFF
-	rm $OUT_BUFF
+	[ $RC -eq 0 ] || return 1
 	return 0
 }
 
@@ -438,7 +459,7 @@ function list_tables()
 	else
 		rm -f $TABLE_LIST_FILE || return 1
 	fi
-	BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	QUERY="select table_name, table_rows from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
 	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF || { rm $BUFF; return 1; }
 	#if no limit defined, just mount table list
@@ -452,13 +473,15 @@ function list_tables()
 	while read -r LINE; do
 		local TABLE=`echo $LINE | awk '{ print $1; }'`
 		local ROWS=`echo $LINE | awk '{ print $2; }'`
+		#add 10%, because stats can be old
+		ROWS=`echo "scale=0; $ROWS * 1.1 / 1" | bc`
 		local FIRST=1
 		while [ $FIRST -le $ROWS ]; do
 			local LAST=$((FIRST+LIMIT_TRANSACTION_LENGTH-1))
 			echo "$TABLE:$FIRST-$LAST" >>$TABLE_LIST_FILE
 			FIRST=$((LAST+1))
 		done
-		LAST=$((99999999999))
+		LAST=99999999999
 		echo "$TABLE:$FIRST-$LAST" >>$TABLE_LIST_FILE
 	done <$BUFF
 	rm $BUFF
@@ -475,11 +498,34 @@ function list_views()
 	return 0
 }
 
+function load_modules()
+{
+	local MOD_DIR=/usr/lib/my-mirror/modules
+
+	write_out "Loading modules"
+	if [ -n "$MY_MIRROR_MODULES_DIR" ]; then
+		MOD_DIR="$MY_MIRROR_MODULES_DIR"
+	fi
+
+	for F in "$MOD_DIR"/*; do
+		source "$F" || return 1
+	done
+}
+
+function mount_log_path()
+{
+	local DT=`date +%Y-%m-%d`
+	local LOG_DIR=/var/log/my-admin-tools/my-mirror/$DT
+	mkdir -p $LOG_DIR || return 1
+	local TS=`date +%H-%M-%S`
+	local LOG_BN=${TS}.log
+	echo $LOG_DIR/$LOG_BN
+}
+
 function run()
 {
 	local AWS=0
 	local L_TABLE
-	CANCEL=0
 	CREATE_TABLES=1
 	IGNORE_LIST_FILE=
 	COPY_EVENTS=0
@@ -495,15 +541,18 @@ function run()
 	RESUME=0
 	TH_COUNT=1
 	COPY_ALL=0
+	AWS_SKIP_TO_DATA=0
 
 	local opt
 
-	while getopts "AEFGRSTVad:i:kl:n:rs:tU" opt; do
+	while getopts "ADEFGRSTVad:i:kl:n:rs:tU" opt; do
 		case $opt in
 			A)
 				AWS=1;;
 			a)
 				COPY_ALL=1;;
+			D)
+				AWS_SKIP_TO_DATA=1;;
 			E)
 				COPY_EVENTS=1;;
 			F)
@@ -549,17 +598,25 @@ function run()
 	CONFIG_FILE=/etc/my-mirror.conf
 	SPOOL_DIR=/tmp
 	read_config || return 1
+
+	local TMP_LOG_FILE=`mount_log_path` || return 1
+	write_out "Log file: $TMP_LOG_FILE"
+	LOG_FILE="$TMP_LOG_FILE"
 	mkdir -p "$SPOOL_DIR" || return 1
 	mkdir -p "$WORK_DIR" || return 1
 	if [ $LIMIT_TRANSACTION_LENGTH -ne 0 ]; then
 		write_out "Spool directory: $SPOOL_DIR"
 	fi
 	LOCK_FILE=$WORK_DIR/.lock
+	CANCEL_FILE=$WORK_DIR/.cancel
+	echo 0 >$CANCEL_FILE || return 1
 	TABLE_LIST_FILE=$WORK_DIR/tables
 	if [ $AWS -eq 1 ]; then
 		validate_aws_options || return 1
-		copy_aws $* || return 1
-		return 0
+		copy_aws $*
+		RC=$?
+		rm $CANCEL_FILE
+		return $RC
 	fi
 
 	if [ $# -lt 1 -o $# -gt 2 ]; then
@@ -578,6 +635,7 @@ function run()
 		write_out "$IGNORE_LIST_FILE: file not found"
 		return 1
 	fi
+
 	if [ -n "$L_TABLE" ]; then
 		copy_one_table_or_list "$L_TABLE" || return 1
 		return 0
@@ -656,13 +714,14 @@ function copy_one_table()
 	EXP_SIZE=`stat -c %s $EXP_ERR_BUFF`
 	IMP_SIZE=`stat -c %s $IMP_ERR_BUFF`
 	while [ $EXP_SIZE -ne 0 -o $IMP_SIZE -ne 0 ]; do
+		local CANCEL=`cat $CANCEL_FILE`
 		if [ $CANCEL -eq 1 ]; then
 			break
 		fi
 		if [ $L_RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
 			TXT="$L_UTABLE: error again\n   Aborting"
 			write_out "$TXT"
-			CANCEL=1
+			echo 1 >$CANCEL_FILE
 			break
 		fi
 		EXP_MSG=`cat $EXP_ERR_BUFF`
@@ -679,6 +738,7 @@ function copy_one_table()
 	done
 	rm $EXP_ERR_BUFF $IMP_ERR_BUFF
 	local STATUS="finished"
+	local CANCEL=`cat $CANCEL_FILE`
 	if [ $CANCEL -eq 1 ]; then
 		STATUS="cancelled"
 	fi
@@ -701,18 +761,16 @@ function copy_one_table_or_list()
 
 function copy_one_table_interval()
 {
-	local L_DUMP_OPT
 	local L_EXIST
 	local L_RETRY_COUNT
-	local L_TABLE
 	local L_UTABLE
 
-	L_TABLE=$1
+	local TABLE=$1
 	local INTERVAL=$2
-	L_UTABLE=${L_TABLE^^}
+	L_UTABLE=${TABLE^^}
 	local UTABLE_WITH_INT="$L_UTABLE [$INTERVAL]"
 	if [ -n "$IGNORE_LIST_FILE" -a -f "$IGNORE_LIST_FILE" ]; then
-		if grep -wi $L_TABLE "$IGNORE_LIST_FILE" >/dev/null; then
+		if grep -wi $TABLE "$IGNORE_LIST_FILE" >/dev/null; then
 			write_out "Table $L_UTABLE is ignored"
 			return 0
 		fi
@@ -720,80 +778,69 @@ function copy_one_table_interval()
 	local FIRST=`echo $INTERVAL | cut -d "-" -f 1`
 	#if first block, create table if not exists
 	if [ $FIRST -eq 1 ]; then
-		create_table_if_not_exists $L_TABLE || return 1
+		create_table_if_not_exists $TABLE || return 1
 	fi
 
 	local USCHEMA=${SCHEMA^^}
 	write_out "Copying table $USCHEMA.$UTABLE_WITH_INT"
-	if ! drop_all_triggers $L_TABLE; then
-		write_out "Aborting"
-		CANCEL=1
+	if ! drop_all_triggers $TABLE; then
 		return 1
 	fi
 
+	local EXP_OPT="--login-path=$SRC --hex-blob --set-gtid-purged=off --max-allowed-packet=32M --skip-lock-tables --skip-add-locks"
 	if [ $CREATE_TABLES -eq 0 ]; then
-		L_EXIST=`table_exists $L_TABLE`
-		if [ $L_EXIST -eq 1 ]; then
-			L_DUMP_OPT="$L_DUMP_OPT --insert-ignore --no-create-info"
+		local EXISTS=`table_exists $TABLE`
+		if [ $EXISTS -eq 1 ]; then
+			EXP_OPT="$EXP_OPT --insert-ignore --no-create-info --skip-triggers"
 		fi
 	fi
 	if [ $ONLY_TABLE_STRUCTURE -eq 1 ]; then
-		L_DUMP_OPT="$L_DUMP_OPT --no-data"
+		EXP_OPT="$EXP_OPT --no-data"
 	fi
 
 	local RETRY_COUNT=1
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	local LAST=`echo $INTERVAL | cut -d "-" -f 2`
 	local COUNT=$((LAST-FIRST+1))
 	local WHERE="true limit $FIRST, $COUNT"
-	local SPOOL=`mktemp $SPOOL_DIR/my-mirror.XXXXXX`
-	mysqldump --login-path=$SRC --hex-blob --set-gtid-purged=off $L_DUMP_OPT --max-allowed-packet=32M --insert-ignore --skip-lock-tables --skip-add-locks --where "$WHERE" --result-file "$SPOOL" $SCHEMA $L_TABLE 2>$ERR_BUFF
-	local RC=$?
-	cat $ERR_BUFF
-	rm $ERR_BUFF
-	while [ $RC -ne 0 ]; do
+	local IMP_OPT="--login-path=$DST"
+	mysqldump $EXP_OPT --where "$WHERE" $SCHEMA $TABLE 2>$EXP_ERR_BUFF | mysql $IMP_OPT $SCHEMA 2>$IMP_ERR_BUFF
+	write_file_out $EXP_ERR_BUFF
+	write_file_out $IMP_ERR_BUFF
+	EXP_ERR_LEN=`stat -c %s $EXP_ERR_BUFF`
+	rm $EXP_ERR_BUFF
+	IMP_ERR_LEN=`stat -c %s $IMP_ERR_BUFF`
+	rm $IMP_ERR_BUFF
+	while [ $EXP_ERR_LEN -ne 0 -o $IMP_ERR_LEN -ne 0 ]; do
 		if [ $RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
-			TXT="$UTABLE_WITH_INT: error again - Aborting"
+			TXT="$UTABLE_WITH_INT: error again - aborting"
 			write_out "$TXT"
-			CANCEL=1
+			echo 1 >$CANCEL_FILE
 			rm $SPOOL
 			return 1
 		fi
+		TXT="$UTABLE_WITH_INT: error - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT)"
+		write_out "$TXT"
 		sleep $RETRY_INTERVAL
-		mysqldump --login-path=$SRC --hex-blob --set-gtid-purged=off $L_DUMP_OPT --max-allowed-packet=32M --insert-ignore --skip-lock-tables --skip-add-locks --where "$WHERE" --result-file "$SPOOL" $SCHEMA $L_TABLE 2>$ERR_BUFF
-		local RC=$?
-		cat $ERR_BUFF
-		rm $ERR_BUFF
+		local EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		local IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		mysqldump $EXP_OPT --where "$WHERE" $SCHEMA $TABLE 2>$EXP_ERR_BUFF | mysql $IMP_OPT $SCHEMA 2>$IMP_ERR_BUFF
+		write_file_out $EXP_ERR_BUFF
+		write_file_out $IMP_ERR_BUFF
+		EXP_ERR_LEN=`stat -c %s $EXP_ERR_BUFF`
+		rm $EXP_ERR_BUFF
+		IMP_ERR_LEN=`stat -c %s $IMP_ERR_BUFF`
+		rm $IMP_ERR_BUFF
 		((RETRY_COUNT++))
 	done
-	local RETRY_COUNT=1
-	mysql --login-path=$DST $SCHEMA <"$SPOOL" 2>$ERR_BUFF
-	cat $ERR_BUFF
-	rm $ERR_BUFF
-	local RC=$?
-	while [ $RC -ne 0 ]; do
-		if [ $RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
-			TXT="$UTABLE_WITH_INT: error again - Aborting"
-			write_out "$TXT"
-			CANCEL=1
-			rm $SPOOL
-			return 1
-		fi
-		sleep $RETRY_INTERVAL
-		mysql --login-path=$DST $SCHEMA <"$SPOOL" 2>$ERR_BUFF
-		local RC=$?
-		cat $ERR_BUFF
-		rm $ERR_BUFF
-		((RETRY_COUNT++))
-	done
-	rm $SPOOL
 	write_out "Table $USCHEMA.$UTABLE_WITH_INT finished"
 	return 0
 }
 
 function copy_one_virtual_column()
 {
-	local BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	local QUERY="show create table $TABLE_SCHEMA.$TABLE_NAME"
 	mysql --login-path=$SRC -N -e "$QUERY" | sed -e 's/\\n/\n/g' | grep -m 1 -w $COLUMN_NAME | sed -e 's/,$//' | sed -e 's/\\/\\\\/g' >$BUFF || return 1
 	local NEW_COL=`cat $BUFF`
@@ -819,7 +866,7 @@ function copy_table_custom_list()
 function read_config()
 {
 	SPOOL_DIR=`crudini --get $CONFIG_FILE main spool_dir 2>/dev/null`
-	if [ -z "$SPOOl_DIR" ]; then
+	if [ -z "$SPOOL_DIR" ]; then
 		SPOOL_DIR=/tmp
 	fi
 	WORK_DIR=`crudini --get $CONFIG_FILE main work_dir 2>/dev/null`
@@ -855,7 +902,8 @@ function th_main()
 {
 	local FIRST=1
 	local L_TABLE=`get_next_table`
-	while [ -n "$L_TABLE" ]; do
+	local CANCEL=`cat $CANCEL_FILE`
+	while [ -n "$L_TABLE" -a $CANCEL -eq 0 ]; do
 		#for the first table, sleep between 101ms and 1s, to avoid deadlock
 		if [ $FIRST -eq 1 ]; then
 			FIRST=0
@@ -869,6 +917,8 @@ function th_main()
 			if copy_one_table_interval $L_TABLE_ONLY $INTERVAL $TABLE_LIST_FILE; then
 				#remove table from list
 				remove_table_from_list $L_TABLE
+			else
+				echo 1 >$CANCEL_FILE
 			fi
 		else
 			if copy_one_table $L_TABLE $TABLE_LIST_FILE; then
@@ -877,9 +927,7 @@ function th_main()
 			fi
 		fi
 		L_TABLE=`get_next_table`
-		if [ $CANCEL -eq 1 ]; then
-			break
-		fi
+		local CANCEL=`cat $CANCEL_FILE`
 	done
 }
 
@@ -887,7 +935,7 @@ function usage()
 {
 	echo "Usage:" 
 	echo "$0 [ -E ] [ -R ] [ -S ] [ -T ] [ -V ] -d <login path> [ -i <file> ] [ -k ] [ -l <limit> ] [ -r ] -s <login path> [ -n <threads> ] [ -t ] [ <schema> [ <table> | @<table list file>] ]"
-	echo "$0 -A [ -a ] [ -F ] [ -l <limit> [ -n <threads> ] [ -S ] -d <login path> -s <login path>"
+	echo "$0 -A [ -a ] [ -D ] [ -F ] [ -l <limit> [ -n <threads> ] [ -S ] -d <login path> -s <login path>"
 	echo "$0 -U -d <login path> -s <login path>"
 	echo "   -A: Activate AWS Mode. See below."
 	echo "   -E: Copy events"
@@ -914,7 +962,8 @@ function usage()
 	echo "   table: If set, only this table is copied"
 	echo "   table list file: If set, only tables listed in this file are copied"
 	echo "   AWS Mode - Copy full structure, preparing for a migration from an AWS RDS (standard RDS and Aurora). Triggers and virtual columns are skept."
-	echo "      -a: Copy structure, copy all data, and then recreate virtual columns and copy triggers. Can't be used with -F."
+	echo "      -a: Copy structure, copy all data, and then recreate virtual columns and copy triggers. Can't be used with -D. Can't be used with -F."
+	echo "      -D: Skip structure. Copy all data, and then recreate virtual columns and copy triggers. Can't be used with -a. Can't be used with -F."
 	echo "      -F: Finish copy: recreate virtual columns and copy triggers. Can't be used with -a."
 	echo "      -l: Limit transaction length when reading source. Each transaction reads <limit> rows."
 	echo "          Min: 10000. Max: 99.999.999"
@@ -967,6 +1016,22 @@ function validate_options_aws()
 	fi
 }
 
+function write_file_out()
+{
+	local OUT_F="$1"
+	local SIZE=`stat -c %s "$OUT_F"`
+	if [ $SIZE -eq 0 ]; then
+		return 0
+	fi
+	local TS=`date +"%d %H:%M:%S"`
+	local MSG="[$TS]\n`cat \"$OUT_F\" | sed -e 's/^/\t/'`"
+	echo -e "$MSG"
+	if [ -n "$LOG_FILE" ]; then
+		echo -e "$MSG" >>"$LOG_FILE"
+	fi
+	return 0
+}
+
 function write_out()
 {
 	MSG="$1"
@@ -979,19 +1044,19 @@ function write_out()
 
 function handle_int()
 {
-	CANCEL=1
+	echo 1 >$CANCEL_FILE
 	pkill -P $$
 }
 
 function handle_term()
 {
-	CANCEL=1
+	echo 1 >$CANCEL_FILE
 	pkill -P $$
 }
 
 function users_role_exists()
 {
-	OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	local ROLE=$1
 	local QUERY="select count(1) from mysql.user where user = '$ROLE' and authentication_string = ''"
 	mysql --login-path=$DST -N -e "$QUERY" >$OUT_BUFF || { rm $OUT_BUFF; return 1; }
