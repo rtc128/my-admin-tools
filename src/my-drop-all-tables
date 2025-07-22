@@ -42,7 +42,7 @@ function run()
 
 	local SCRIPT=`mktemp /tmp/my-admin-tools.XXXXXX`
 	generate_script $SCRIPT || return 1
-	mysql --login-path=$LOGIN_PATH $SCHEMA <$SCRIPT || return 1
+	mysql --login-path=$LOGIN_PATH -vvv $SCHEMA <$SCRIPT || return 1
 	rm $SCRIPT
 }
 
