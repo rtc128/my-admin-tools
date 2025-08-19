@@ -1,7 +1,7 @@
 #!/bin/bash
 
-MAX_RETRY_COUNT=5
-RETRY_INTERVAL=10
+MAX_RETRY_COUNT=3
+RETRY_INTERVAL=5
 
 if [ "$DEBUG" == "1" ]; then
    set -xv
@@ -41,7 +41,8 @@ function copy_all_schemas()
 
 function copy_events()
 {
-	write_out "Copying events [$SCHEMA]"
+	local USCHEMA=${SCHEMA^^}
+	write_out "Copying events [$USCHEMA]"
 	mysqldump --login-path=$SRC --set-gtid-purged=off --no-create-info --no-data --events --skip-triggers $SCHEMA | mysql --login-path=$DST $SCHEMA || return 1;
 }
 
@@ -52,11 +53,11 @@ function copy_aws()
 
 	if [ $FINISH_MODE -eq 0 ]; then
 		if [ $AWS_SKIP_TO_DATA -eq 0 ]; then
-			write_out "*** Copying structure from AWS RDS"
+			write_out "Copying structure from AWS RDS"
 			copy_aws_startup || { rm $SCHEMA_LIST; return 1; }
 		fi
 	else
-		write_out "*** Copying structure from AWS RDS (finish stage)"
+		write_out "Copying structure from AWS RDS (finish stage)"
 		copy_aws_finish || { rm $SCHEMA_LIST; return 1; }
 	fi
 	if [ $COPY_ALL -eq 1 ]; then
@@ -69,7 +70,6 @@ function copy_aws()
 		copy_virtual_columns || { rm $SCHEMA_LIST; return 1; }
 	fi
 	rm $SCHEMA_LIST
-	write_out "*** Finished"
 	return 0
 }
 
@@ -225,8 +225,9 @@ function copy_routines()
 
 function copy_tables()
 {
+	local USCHEMA=${SCHEMA^^}
 	if [ $COPY_CUSTOM_TABLES -eq 0 ]; then
-		write_out "*** Copying tables [$SCHEMA]"
+		write_out "Copying tables [$USCHEMA]"
 		list_tables || return 1
 	else
 		cp "$CUSTOM_TABLE_LIST_FILE" "$TABLE_LIST_FILE" || return 1
@@ -419,19 +420,33 @@ function drop_virtual_columns()
 	mysql --login-path=$DST -N -e "$QUERY" | mysql --login-path=$DST
 }
 
-function get_next_table()
+function get_next_pre_table()
 {
-	local L_TABLE
+	local TABLE
 
 	{
 		flock 3
-		L_TABLE=`grep -v -m 1 '#' $TABLE_LIST_FILE`
+		TABLE=`grep -v -m 1 '#' $TABLE_PRE_LIST_FILE`
 		#if not found, return
-		[ -n "$L_TABLE" ] || return
+		[ -n "$TABLE" ] || return
 		#comment retrieved table
-		sed -i -e "s/^$L_TABLE$/#$L_TABLE/" $TABLE_LIST_FILE
+		sed -i -e "s/^$TABLE$/#$TABLE/" $TABLE_PRE_LIST_FILE
 	} 3<$LOCK_FILE
-	echo $L_TABLE
+	echo $TABLE
+}
+
+function get_next_table()
+{
+	local TABLE
+	{
+		flock 3
+		TABLE=`grep -v -m 1 '#' $TABLE_LIST_FILE`
+		#if not found, return
+		[ -n "$TABLE" ] || return
+		#comment retrieved table
+		sed -i -e "s/^$TABLE$/#$TABLE/" $TABLE_LIST_FILE
+	} 3<$LOCK_FILE
+	echo $TABLE
 }
 
 function list_schemas()
@@ -459,32 +474,45 @@ function list_tables()
 	else
 		rm -f $TABLE_LIST_FILE || return 1
 	fi
-	BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	QUERY="select table_name, table_rows from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
-	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF || { rm $BUFF; return 1; }
-	#if no limit defined, just mount table list
-	if [ $LIMIT_TRANSACTION_LENGTH -eq 0 ]; then
-		awk '{ print $1; }' $BUFF >$TABLE_LIST_FILE
-		rm $BUFF
-		return 0
-	fi
-	#split each table
-	local LINE
-	while read -r LINE; do
-		local TABLE=`echo $LINE | awk '{ print $1; }'`
-		local ROWS=`echo $LINE | awk '{ print $2; }'`
-		#add 10%, because stats can be old
-		ROWS=`echo "scale=0; $ROWS * 1.1 / 1" | bc`
-		local FIRST=1
-		while [ $FIRST -le $ROWS ]; do
-			local LAST=$((FIRST+LIMIT_TRANSACTION_LENGTH-1))
-			echo "$TABLE:$FIRST-$LAST" >>$TABLE_LIST_FILE
-			FIRST=$((LAST+1))
-		done
-		LAST=99999999999
-		echo "$TABLE:$FIRST-$LAST" >>$TABLE_LIST_FILE
-	done <$BUFF
-	rm $BUFF
+	TABLE_PRE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	QUERY="select table_name, round(table_rows * 1.1, 0) from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
+	mysql --login-path=$SRC -N -e "$QUERY" >$TABLE_PRE_LIST_FILE || { rm $TABLE_PRE_LIST_FILE; return 1; }
+
+	#just copy or split each table
+	: >>$LOCK_FILE
+	LIST=`seq 1 $TH_COUNT`
+	for I in $LIST; do
+		list_tables_th &
+	done
+	wait
+
+	rm $TABLE_PRE_LIST_FILE
+	local CANCEL=`cat $CANCEL_FILE`
+	return $CANCEL
+}
+
+function list_tables_th()
+{
+	local FULL_TABLE=`get_next_pre_table`
+	while [ -n "$FULL_TABLE" ]; do
+		local TABLE=`echo $FULL_TABLE | awk '{ print $1; }'`
+		local ROWS=`echo $FULL_TABLE | awk '{ print $2; }'`
+		#if no limit defined, just mount table list
+		if [ $LIMIT_TRANSACTION_LENGTH -eq 0 ]; then
+			echo $TABLE >>$TABLE_LIST_FILE
+		else
+			#split tables
+			local RC=0
+			local LINE
+			if [ $ROWS -gt $LIMIT_TRANSACTION_LENGTH ]; then
+				split_table "$TABLE" $ROWS || { echo 1 >$CANCEL_FILE; break; }
+			else
+				echo "$TABLE" >>$TABLE_LIST_FILE
+			fi
+		fi
+		remove_line_from_file "#$FULL_TABLE" $TABLE_PRE_LIST_FILE
+		local FULL_TABLE=`get_next_pre_table`
+	done
 }
 
 function list_views()
@@ -599,23 +627,31 @@ function run()
 	SPOOL_DIR=/tmp
 	read_config || return 1
 
-	local TMP_LOG_FILE=`mount_log_path` || return 1
-	write_out "Log file: $TMP_LOG_FILE"
-	LOG_FILE="$TMP_LOG_FILE"
 	mkdir -p "$SPOOL_DIR" || return 1
 	mkdir -p "$WORK_DIR" || return 1
 	if [ $LIMIT_TRANSACTION_LENGTH -ne 0 ]; then
 		write_out "Spool directory: $SPOOL_DIR"
 	fi
 	LOCK_FILE=$WORK_DIR/.lock
-	CANCEL_FILE=$WORK_DIR/.cancel
-	echo 0 >$CANCEL_FILE || return 1
 	TABLE_LIST_FILE=$WORK_DIR/tables
 	if [ $AWS -eq 1 ]; then
 		validate_aws_options || return 1
+		local TMP_LOG_FILE=`mount_log_path` || return 1
+		write_out "Log file: $TMP_LOG_FILE"
+		LOG_FILE="$TMP_LOG_FILE"
+		CANCEL_FILE=$WORK_DIR/.cancel
+		echo 0 >$CANCEL_FILE || return 1
+		if [ -n "$LIMIT_TRANSACTION_LENGTH" ]; then
+			write_out "Limit transaction length: $LIMIT_TRANSACTION_LENGTH"
+		fi
 		copy_aws $*
 		RC=$?
 		rm $CANCEL_FILE
+		if [ $RC -eq 0 ]; then
+			write_out "Operation finished successfully"
+		else
+			write_out "Operation cancelled"
+		fi
 		return $RC
 	fi
 
@@ -623,6 +659,9 @@ function run()
 		usage
 		return 1
 	fi
+	local TMP_LOG_FILE=`mount_log_path` || return 1
+	write_out "Log file: $TMP_LOG_FILE"
+	LOG_FILE="$TMP_LOG_FILE"
 	SCHEMA=$1
 	if [ $# -eq 2 ]; then
 		L_TABLE=$2
@@ -742,7 +781,7 @@ function copy_one_table()
 	if [ $CANCEL -eq 1 ]; then
 		STATUS="cancelled"
 	fi
-	write_out "Table $USCHEMA.$L_UTABLE $STATUS"
+	write_out "  Table $USCHEMA.$L_UTABLE $STATUS"
 	return 0
 }
 
@@ -761,80 +800,100 @@ function copy_one_table_or_list()
 
 function copy_one_table_interval()
 {
+	local LINE="$1"
+	local TABLE_NAME=`echo $LINE | cut -d : -f 1`
+	local UTABLE_NAME=${TABLE_NAME^^}
+	local BY_PK=1
+
+	#if only 2 fields, it's splitted by rownum
+	local INTERVAL=`echo $LINE | cut -d : -f 3`
+	if [ -z "$INTERVAL" ]; then
+		local BY_PK=0
+		local INTERVAL=`echo $LINE | cut -d : -f 2`
+	else
+		local COL_NAME=`echo $LINE | cut -d : -f 2`
+		local UCOL_NAME=${COL_NAME^^}
+	fi
+
+	local FIRST=`echo $INTERVAL | cut -d "-" -f 1`
+	local LAST=`echo $INTERVAL | cut -d "-" -f 2`
+
+	if [ $BY_PK -eq 1 ]; then
+		local UTABLE_WITH_INT="$UTABLE_NAME [$UCOL_NAME $FIRST to $LAST]"
+		local WHERE="$UCOL_NAME between $FIRST and $LAST"
+	else
+		local COUNT=$((LAST-FIRST+1))
+		local UTABLE_WITH_INT="$UTABLE_NAME [rows #$FIRST to #$LAST]"
+		local WHERE="true limit $FIRST, $COUNT"
+	fi
+
 	local L_EXIST
 	local L_RETRY_COUNT
-	local L_UTABLE
 
-	local TABLE=$1
-	local INTERVAL=$2
-	L_UTABLE=${TABLE^^}
-	local UTABLE_WITH_INT="$L_UTABLE [$INTERVAL]"
 	if [ -n "$IGNORE_LIST_FILE" -a -f "$IGNORE_LIST_FILE" ]; then
-		if grep -wi $TABLE "$IGNORE_LIST_FILE" >/dev/null; then
-			write_out "Table $L_UTABLE is ignored"
+		if grep -wi $TABLE_NAME "$IGNORE_LIST_FILE" >/dev/null; then
+			write_out "Table $UTABLE_NAME is ignored"
 			return 0
 		fi
 	fi
-	local FIRST=`echo $INTERVAL | cut -d "-" -f 1`
+
+	local CANCEL=`cat $CANCEL_FILE`
 	#if first block, create table if not exists
 	if [ $FIRST -eq 1 ]; then
-		create_table_if_not_exists $TABLE || return 1
+		create_table_if_not_exists $TABLE_NAME || return 1
 	fi
 
 	local USCHEMA=${SCHEMA^^}
 	write_out "Copying table $USCHEMA.$UTABLE_WITH_INT"
-	if ! drop_all_triggers $TABLE; then
+
+	if ! drop_all_triggers $TABLE_NAME; then
 		return 1
 	fi
 
 	local EXP_OPT="--login-path=$SRC --hex-blob --set-gtid-purged=off --max-allowed-packet=32M --skip-lock-tables --skip-add-locks"
 	if [ $CREATE_TABLES -eq 0 ]; then
-		local EXISTS=`table_exists $TABLE`
+		local EXISTS=`table_exists $TABLE_NAME`
 		if [ $EXISTS -eq 1 ]; then
-			EXP_OPT="$EXP_OPT --insert-ignore --no-create-info --skip-triggers"
+			local EXP_OPT="$EXP_OPT --insert-ignore --no-create-info --skip-triggers"
 		fi
 	fi
 	if [ $ONLY_TABLE_STRUCTURE -eq 1 ]; then
-		EXP_OPT="$EXP_OPT --no-data"
+		local EXP_OPT="$EXP_OPT --no-data"
 	fi
 
 	local RETRY_COUNT=1
 	local EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	local IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local LAST=`echo $INTERVAL | cut -d "-" -f 2`
-	local COUNT=$((LAST-FIRST+1))
-	local WHERE="true limit $FIRST, $COUNT"
 	local IMP_OPT="--login-path=$DST"
-	mysqldump $EXP_OPT --where "$WHERE" $SCHEMA $TABLE 2>$EXP_ERR_BUFF | mysql $IMP_OPT $SCHEMA 2>$IMP_ERR_BUFF
+	mysqldump $EXP_OPT --where "$WHERE" $SCHEMA $TABLE_NAME 2>$EXP_ERR_BUFF | mysql $IMP_OPT $SCHEMA 2>$IMP_ERR_BUFF
 	write_file_out $EXP_ERR_BUFF
 	write_file_out $IMP_ERR_BUFF
-	EXP_ERR_LEN=`stat -c %s $EXP_ERR_BUFF`
+	local EXP_ERR_LEN=`stat -c %s $EXP_ERR_BUFF`
 	rm $EXP_ERR_BUFF
-	IMP_ERR_LEN=`stat -c %s $IMP_ERR_BUFF`
+	local IMP_ERR_LEN=`stat -c %s $IMP_ERR_BUFF`
 	rm $IMP_ERR_BUFF
 	while [ $EXP_ERR_LEN -ne 0 -o $IMP_ERR_LEN -ne 0 ]; do
 		if [ $RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
-			TXT="$UTABLE_WITH_INT: error again - aborting"
+			local TXT="$UTABLE_WITH_INT: error again - aborting"
 			write_out "$TXT"
 			echo 1 >$CANCEL_FILE
-			rm $SPOOL
 			return 1
 		fi
-		TXT="$UTABLE_WITH_INT: error - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT)"
+		local TXT="$UTABLE_WITH_INT: error - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT)"
 		write_out "$TXT"
 		sleep $RETRY_INTERVAL
 		local EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 		local IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		mysqldump $EXP_OPT --where "$WHERE" $SCHEMA $TABLE 2>$EXP_ERR_BUFF | mysql $IMP_OPT $SCHEMA 2>$IMP_ERR_BUFF
+		mysqldump $EXP_OPT --where "$WHERE" $SCHEMA $TABLE_NAME 2>$EXP_ERR_BUFF | mysql $IMP_OPT $SCHEMA 2>$IMP_ERR_BUFF
 		write_file_out $EXP_ERR_BUFF
 		write_file_out $IMP_ERR_BUFF
-		EXP_ERR_LEN=`stat -c %s $EXP_ERR_BUFF`
+		local EXP_ERR_LEN=`stat -c %s $EXP_ERR_BUFF`
 		rm $EXP_ERR_BUFF
-		IMP_ERR_LEN=`stat -c %s $IMP_ERR_BUFF`
+		local IMP_ERR_LEN=`stat -c %s $IMP_ERR_BUFF`
 		rm $IMP_ERR_BUFF
 		((RETRY_COUNT++))
 	done
-	write_out "Table $USCHEMA.$UTABLE_WITH_INT finished"
+	write_out "  Table $USCHEMA.$UTABLE_WITH_INT finished"
 	return 0
 }
 
@@ -875,15 +934,173 @@ function read_config()
 	fi
 }
 
-function remove_table_from_list()
+function remove_line_from_file()
 {
-	local L_TABLE
-
-	L_TABLE=$1
+	local LINE="$1"
+	local FPATH="$2"
 	{
 		flock 3
-		sed -i -e "/^#$L_TABLE$/d" $TABLE_LIST_FILE
+		sed -i -e "/^$LINE$/d" $FPATH
 	} 3<$LOCK_FILE
+}
+
+function split_table()
+{
+	local TABLE_NAME="$1"
+	local ROWS=$2
+	local UTABLE_NAME=${TABLE^^}
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+
+	write_out "Checking if table $UTABLE_NAME has a numeric single-column PK"
+	local QUERY="desc $TABLE_NAME"
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+
+	local PK_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	grep -w PRI $OUT_BUFF >$PK_BUFF
+	rm $OUT_BUFF
+
+	#if PK is a single column
+	local COUNT_COLS=`cat $PK_BUFF | wc -l`
+	if [ $COUNT_COLS -eq 1 ]; then
+		local COL_NAME=`cat $PK_BUFF | awk '{print $1}'`
+		local TYPE=`cat $PK_BUFF | awk '{print $2}'`
+		rm $PK_BUFF
+		local SIMPLE_TYPE=`echo $TYPE | sed -e 's/(.*)//'`
+		if [ "$SIMPLE_TYPE" == "decimal" -o "$SIMPLE_TYPE" == "int" -o "$SIMPLE_TYPE" == "bigint" ]; then
+			#PK can be used
+			split_table_pk "$TABLE_NAME" "$COL_NAME" || return 1
+		else
+			split_table_rownum "$TABLE_NAME" $ROWS || return 1
+		fi
+	else
+		rm $PK_BUFF
+		split_table_rownum "$TABLE_NAME" $ROWS || return 1
+	fi
+}
+
+function split_table_pk()
+{
+	local TABLE_NAME="$1"
+	local COL_NAME="$2"
+	local UTABLE_NAME="${TABLE_NAME^^}"
+	local UCOL_NAME="${COL_NAME^^}"
+
+	#get min
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local QUERY="select min($COL_NAME) from $TABLE_NAME"
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	local MIN_VAL=`cat $OUT_BUFF`
+	local PART_MIN_VAL=`cat $OUT_BUFF`
+	rm $OUT_BUFF
+
+	#get max
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local QUERY="select max($COL_NAME) from $TABLE_NAME"
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	local MAX_VAL=`cat $OUT_BUFF`
+	rm $OUT_BUFF
+
+	write_out "Splitting table $UTABLE_NAME by PK ($UCOL_NAME)"
+
+	while true; do
+		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		PERCENT=`echo "scale=0; ($PART_MIN_VAL - $MIN_VAL) * 100 / ($MAX_VAL - $MIN_VAL + 1)" | bc`
+		write_out "  Reading partition in table $UTABLE_NAME: >>$PART_MIN_VAL ($PERCENT%)"
+		local QUERY="select max($COL_NAME) from (select $COL_NAME from $TABLE_NAME where $COL_NAME between $PART_MIN_VAL and $MAX_VAL order by 1 limit $LIMIT_TRANSACTION_LENGTH) x"
+		mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+		local RC=$?
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+		local PART_MAX_VAL=`cat $OUT_BUFF`
+		rm $OUT_BUFF
+		if [ -z "$PART_MAX_VAL" -o "$PART_MAX_VAL" == "NULL" ]; then
+			write_out "  Table splitting finished for table $UTABLE_NAME"
+			break
+		fi
+		local LINE="$TABLE_NAME:$COL_NAME:$PART_MIN_VAL-$PART_MAX_VAL"
+		echo "$LINE" >>$TABLE_LIST_FILE
+		local PART_MIN_VAL=`echo $PART_MAX_VAL + 1 | bc`
+	done
+}
+
+function split_table_pk_old()
+{
+	local TABLE_NAME="$1"
+	local COL_NAME="$2"
+	local UTABLE_NAME="${TABLE_NAME^^}"
+	local UCOL_NAME="${COL_NAME^^}"
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+
+	#get min
+	local QUERY="select min($COL_NAME) from $TABLE_NAME"
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	local MIN_VAL=`cat $OUT_BUFF`
+	#get max
+	local QUERY="select max($COL_NAME) from $TABLE_NAME"
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	local MAX_VAL=`cat $OUT_BUFF`
+	rm $OUT_BUFF
+
+	write_out "Splitting table $UTABLE_NAME by PK ($UCOL_NAME) - Max: $MAX_VAL"
+	local CUR_VAL=$MIN_VAL
+	local CANCEL=`cat $CANCEL_FILE`
+	while (( $CUR_VAL <= $MAX_VAL )) && [ $CANCEL -eq 0 ]; do
+		local BATCH_LAST_VAL=`echo $CUR_VAL + $LIMIT_TRANSACTION_LENGTH - 1 | bc`
+		if (( $BATCH_LAST_VAL > $MAX_VAL )); then
+			BATCH_LAST_VAL=$MAX_VAL 
+		fi
+		local LINE="$TABLE_NAME:$COL_NAME:$CUR_VAL-$BATCH_LAST_VAL"
+		echo "$LINE" >>$TABLE_LIST_FILE
+		CUR_VAL=`echo $CUR_VAL + $LIMIT_TRANSACTION_LENGTH | bc`
+		#if (( $CUR_VAL < 0 )); then
+			#return 1
+		#fi
+		CANCEL=`cat $CANCEL_FILE`
+	done
+}
+
+function split_table_rownum()
+{
+	local TABLE_NAME="$1"
+	local ROWS="$2"
+	local UTABLE_NAME="${TABLE_NAME^^}"
+
+	write_out "Splitting table $UTABLE_NAME by row number"
+	local FIRST=1
+	while [ $FIRST -le $ROWS ]; do
+		local LAST=$((FIRST+LIMIT_TRANSACTION_LENGTH-1))
+		echo "$TABLE:$FIRST-$LAST" >>$TABLE_LIST_FILE
+		local FIRST=$((LAST+1))
+	done
+	local LAST=99999999999
+	echo "$TABLE:$FIRST:$LAST" >>$TABLE_LIST_FILE
+	write_out "  Table splitting finished"
 }
 
 function table_exists()
@@ -913,19 +1130,18 @@ function th_main()
 		fi
 		local INTERVAL=`echo $L_TABLE | cut -d : -f 2`
 		if [ "$INTERVAL" != "$L_TABLE" ]; then
-			local L_TABLE_ONLY=`echo $L_TABLE | cut -d : -f 1`
-			if copy_one_table_interval $L_TABLE_ONLY $INTERVAL $TABLE_LIST_FILE; then
-				#remove table from list
-				remove_table_from_list $L_TABLE
-			else
+			if ! copy_one_table_interval $L_TABLE; then
 				echo 1 >$CANCEL_FILE
+				break
 			fi
 		else
-			if copy_one_table $L_TABLE $TABLE_LIST_FILE; then
-				#remove table from list
-				remove_table_from_list $L_TABLE
+			if ! copy_one_table $L_TABLE; then
+				echo 1 >$CANCEL_FILE
+				break
 			fi
 		fi
+		#remove table from list
+		remove_line_from_file "#$L_TABLE" $TABLE_LIST_FILE
 		L_TABLE=`get_next_table`
 		local CANCEL=`cat $CANCEL_FILE`
 	done
@@ -953,7 +1169,7 @@ function usage()
 	echo "       Min: 10000. Max: 99.999.999"
 	echo "   -s: Use login path <login path> as source instance"
 	echo "       Required."
-	echo "   -n: number of threads used in table data copy"
+	echo "   -n: Number of threads used in the following operations: table splitting (if transaction length limit [-l option ] is active); table data copy"
 	echo "       Min: 1. Max: 20. Default: 1."
 	echo "   -r: Resume a cancelled copy (only for tables)"
 	echo "   -t: For tables, copy only triggers"
@@ -1045,13 +1261,11 @@ function write_out()
 function handle_int()
 {
 	echo 1 >$CANCEL_FILE
-	pkill -P $$
 }
 
 function handle_term()
 {
 	echo 1 >$CANCEL_FILE
-	pkill -P $$
 }
 
 function users_role_exists()
