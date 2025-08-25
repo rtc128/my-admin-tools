@@ -1,7 +1,7 @@
 #!/bin/bash
 
-MAX_RETRY_COUNT=3
-RETRY_INTERVAL=5
+MAX_RETRY_COUNT=10
+RETRY_INTERVAL=10
 
 if [ "$DEBUG" == "1" ]; then
    set -xv
@@ -837,25 +837,12 @@ function copy_one_table_interval()
 		fi
 	fi
 
-	local CANCEL=`cat $CANCEL_FILE`
-	#if first block, create table if not exists
-	if [ $FIRST -eq 1 ]; then
-		create_table_if_not_exists $TABLE_NAME || return 1
-	fi
-
 	local USCHEMA=${SCHEMA^^}
 	write_out "Copying table $USCHEMA.$UTABLE_WITH_INT"
 
-	if ! drop_all_triggers $TABLE_NAME; then
-		return 1
-	fi
-
-	local EXP_OPT="--login-path=$SRC --hex-blob --set-gtid-purged=off --max-allowed-packet=32M --skip-lock-tables --skip-add-locks"
+	local EXP_OPT="--login-path=$SRC --insert-ignore --hex-blob --set-gtid-purged=off --max-allowed-packet=32M --skip-lock-tables --skip-add-locks --skip-triggers"
 	if [ $CREATE_TABLES -eq 0 ]; then
-		local EXISTS=`table_exists $TABLE_NAME`
-		if [ $EXISTS -eq 1 ]; then
-			local EXP_OPT="$EXP_OPT --insert-ignore --no-create-info --skip-triggers"
-		fi
+		local EXP_OPT="$EXP_OPT --no-create-info"
 	fi
 	if [ $ONLY_TABLE_STRUCTURE -eq 1 ]; then
 		local EXP_OPT="$EXP_OPT --no-data"
@@ -872,14 +859,17 @@ function copy_one_table_interval()
 	rm $EXP_ERR_BUFF
 	local IMP_ERR_LEN=`stat -c %s $IMP_ERR_BUFF`
 	rm $IMP_ERR_BUFF
+	local CANCEL=`cat $CANCEL_FILE`
 	while [ $EXP_ERR_LEN -ne 0 -o $IMP_ERR_LEN -ne 0 ]; do
+		[ $CANCEL -eq 0 ] || return 1
 		if [ $RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
 			local TXT="$UTABLE_WITH_INT: error again - aborting"
 			write_out "$TXT"
 			echo 1 >$CANCEL_FILE
 			return 1
 		fi
-		local TXT="$UTABLE_WITH_INT: error - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT)"
+		((RETRY_COUNT++))
+		local TXT="  $UTABLE_WITH_INT: error - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT/#$MAX_RETRY_COUNT)"
 		write_out "$TXT"
 		sleep $RETRY_INTERVAL
 		local EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
@@ -891,7 +881,7 @@ function copy_one_table_interval()
 		rm $EXP_ERR_BUFF
 		local IMP_ERR_LEN=`stat -c %s $IMP_ERR_BUFF`
 		rm $IMP_ERR_BUFF
-		((RETRY_COUNT++))
+		local CANCEL=`cat $CANCEL_FILE`
 	done
 	write_out "  Table $USCHEMA.$UTABLE_WITH_INT finished"
 	return 0
@@ -1017,17 +1007,33 @@ function split_table_pk()
 
 	write_out "Splitting table $UTABLE_NAME by PK ($UCOL_NAME)"
 
-	while true; do
+	local CANCEL=`cat $CANCEL_FILE`
+	while [ $CANCEL -eq 0 ]; do
 		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 		local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 		PERCENT=`echo "scale=0; ($PART_MIN_VAL - $MIN_VAL) * 100 / ($MAX_VAL - $MIN_VAL + 1)" | bc`
 		write_out "  Reading partition in table $UTABLE_NAME: >>$PART_MIN_VAL ($PERCENT%)"
 		local QUERY="select max($COL_NAME) from (select $COL_NAME from $TABLE_NAME where $COL_NAME between $PART_MIN_VAL and $MAX_VAL order by 1 limit $LIMIT_TRANSACTION_LENGTH) x"
+
+		local RETRY_COUNT=1
 		mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
 		local RC=$?
 		write_file_out $ERR_BUFF
 		rm $ERR_BUFF
-		[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+		while [ $RC -ne 0 ]; do
+			rm $OUT_BUFF
+			if [ $COUNT_RETRY -eq $MAX_RETRY_COUNT ]; then
+				write_out "  Error reading partition in table $UTABLE_NAME - Max retries reached"
+				return 1
+			fi
+			((RETRY_COUNT++))
+			write_out "  Error reading partition in table $UTABLE_NAME - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT/#$MAX_RETRY_COUNT)"
+			sleep $RETRY_INTERVAL
+			mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+			local RC=$?
+			write_file_out $ERR_BUFF
+			rm $ERR_BUFF
+		done
 		local PART_MAX_VAL=`cat $OUT_BUFF`
 		rm $OUT_BUFF
 		if [ -z "$PART_MAX_VAL" -o "$PART_MAX_VAL" == "NULL" ]; then
@@ -1037,6 +1043,7 @@ function split_table_pk()
 		local LINE="$TABLE_NAME:$COL_NAME:$PART_MIN_VAL-$PART_MAX_VAL"
 		echo "$LINE" >>$TABLE_LIST_FILE
 		local PART_MIN_VAL=`echo $PART_MAX_VAL + 1 | bc`
+		local CANCEL=`cat $CANCEL_FILE`
 	done
 }
 
