@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.1.5
+Version:			 1.1.6
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -31,6 +31,8 @@ install -m 0755 src/my-drop-all-schemas $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-users $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-triggers $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-fix-definer-events $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-fix-definer-views $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-flush-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-get-digest $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-kill-blockers $RPM_BUILD_ROOT/usr/bin
@@ -51,6 +53,8 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-drop-all-tables
 /usr/bin/my-drop-all-users
 /usr/bin/my-drop-all-triggers
+/usr/bin/my-fix-definer-events
+/usr/bin/my-fix-definer-views
 /usr/bin/my-flush-all-tables
 /usr/bin/my-get-digest
 /usr/bin/my-kill-blockers
@@ -63,6 +67,11 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-unlock-users
 
 %changelog
+
+* Mon Aug 25 2025 Rodrigo Tassinari 1.1.6
+- my-mirror: fix - in RDS mode, do not copy triggers
+- New tool: my-fix-definer-events
+- New tool: my-fix-definer-views
 
 * Tue Aug 19 2025 Rodrigo Tassinari 1.1.5
 - my-mirror: allow multi-threading in table splitting phase
