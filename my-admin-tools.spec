@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.1.7
+Version:			 1.2.0
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -46,7 +46,6 @@ install -m 0755 src/my-replace-table $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-truncate-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 
-
 %files
 /usr/bin/my-analyze-all-tables
 /usr/bin/my-compare-count
@@ -71,6 +70,10 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-unlock-users
 
 %changelog
+
+* Tue Sep 16 2025 Rodrigo Tassinari 1.2.0
+- my-mirror: Support table partitioning by a timestamp column
+- my-mirror: Added support for resuming table data copy
 
 * Tue Aug 26 2025 Rodrigo Tassinari 1.1.7
 - New tool: my-fix-definer-routines
