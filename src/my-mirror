@@ -630,6 +630,7 @@ function print_options()
 	if [ $COPY_ALL -eq 1 ]; then
 		write_out "AWS 'copy all' mode ON"
 	fi
+	write_out "Number of threads: $TH_COUNT"
 	if [ $COPY_EVENTS -eq 1 ]; then
 		write_out "Copy events: enabled"
 	fi
