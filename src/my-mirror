@@ -1,5 +1,6 @@
 #!/bin/bash
 
+MAX_ALLOWED_PACKET_MB=4
 MAX_RETRY_COUNT=10
 RETRY_INTERVAL=15
 
@@ -184,7 +185,7 @@ function create_all_tables()
 			fi
 			local UTABLE=${TABLE^^}
 			write_out "      $UTABLE"
-			mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=32M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE >$SQL_BUFF 2>$ERR_BUFF
+			mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE >$SQL_BUFF 2>$ERR_BUFF
 			local RC=$?
 			write_file_out $ERR_BUFF
 			[ $RC -eq 0 ] || { rm $DST_OBJ_LIST $ERR_BUFF $TABLE_LIST $SQL_BUFF; return 1; }
@@ -843,7 +844,7 @@ function copy_one_table()
 	RETRY_COUNT=0
 	EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	mysqldump --login-path=$SRC --hex-blob --set-gtid-purged=off $L_DUMP_OPT --max-allowed-packet=32M --skip-lock-tables --skip-add-locks --skip-triggers $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
+	mysqldump --login-path=$SRC --hex-blob --set-gtid-purged=off $L_DUMP_OPT --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
 	EXP_SIZE=`stat -c %s $EXP_ERR_BUFF`
 	IMP_SIZE=`stat -c %s $IMP_ERR_BUFF`
 	while [ $EXP_SIZE -ne 0 -o $IMP_SIZE -ne 0 ]; do
@@ -867,7 +868,7 @@ function copy_one_table()
 		write_out "$TXT"
 		sleep $RETRY_INTERVAL
 
-		mysqldump --login-path=$SRC --set-gtid-purged=off $L_DUMP_OPT --max-allowed-packet=32M --skip-lock-tables --skip-add-locks $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | sed -e "s/50017 DEFINER=\`.*\`@\`%\`/50017 DEFINER=\`$SCHEMA\`/" | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
+		mysqldump --login-path=$SRC --set-gtid-purged=off $L_DUMP_OPT --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | sed -e "s/50017 DEFINER=\`.*\`@\`%\`/50017 DEFINER=\`$SCHEMA\`/" | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
 		EXP_SIZE=`stat -c %s $EXP_ERR_BUFF`
 		IMP_SIZE=`stat -c %s $IMP_ERR_BUFF`
 	done
@@ -945,7 +946,7 @@ function copy_one_table_interval()
 		fi
 	fi
 
-	local EXP_OPT="--login-path=$SRC --insert-ignore --hex-blob --set-gtid-purged=off --max-allowed-packet=32M --skip-lock-tables --skip-add-locks --skip-triggers"
+	local EXP_OPT="--login-path=$SRC --insert-ignore --hex-blob --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers"
 	if [ $CREATE_TABLES -eq 0 ]; then
 		local EXP_OPT="$EXP_OPT --no-create-info"
 	fi
