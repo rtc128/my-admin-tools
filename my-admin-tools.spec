@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.2.1
+Version:			 1.2.2
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -70,6 +70,9 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-unlock-users
 
 %changelog
+
+* Fri Sep 19 2025 Rodrigo Tassinari 1.2.2
+- my-mirror: New max allowed packet size: 4Mb
 
 * Wed Sep 17 2025 Rodrigo Tassinari 1.2.1
 - my-mirror: Added number of threads to log
