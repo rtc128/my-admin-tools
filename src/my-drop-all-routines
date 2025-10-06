@@ -1,0 +1,53 @@
+#!/bin/bash
+
+if [ "$DEBUG" == "1" ]; then
+   set -x
+fi
+
+function usage()
+{
+	echo "my-admin-tools: my-drop-routines - drop all routines in a schema"
+	echo "Usage: $0 [ -l <path> ] <schema>"
+	echo "   -l: use login path <path>"
+	echo "      Default: 'client'"
+	echo "Credentials must be saved using 'mysql_config_editor'"
+}
+
+function run()
+{
+	LOGIN_PATH=client
+	while getopts "l:" opt; do
+		case $opt in
+			l)
+				LOGIN_PATH=$OPTARG;;
+			*)
+				echo "Unknown option '$opt'" >&2
+				usage
+				return 1;;
+		esac
+	done
+	shift $((OPTIND-1))
+	if [ $# -ne 1 ]; then
+		usage
+		return 1
+	fi
+	SCHEMA=$1
+
+	local QUERY="select routine_name, routine_type from information_schema.routines where routine_schema = '$SCHEMA'"
+	BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$BUFF || { rm $BUFF; return 1; }
+	local RC=0
+	while read -r LINE; do
+		local NAME=`echo $LINE | awk '{print $1;}'`
+		local TYPE=`echo $LINE | awk '{print $2;}'`
+		echo "$NAME ($TYPE)"
+		QUERY="drop $TYPE $NAME"
+		mysql --login-path=$LOGIN_PATH -e "$QUERY" $SCHEMA || { RC=1; break; }
+	done <$BUFF
+	rm $BUFF
+	return $RC
+}
+
+run $*
+RC=$?
+exit $RC
