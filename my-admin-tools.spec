@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.2.2
+Version:			 1.3.0
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -10,6 +10,7 @@ Source0:			 my-admin-tools.tar.gz
 %description
 Administration tools for MySQL:
 - Analyze all tables: my-analyze-all-tables
+- Drop all routines: my-drop-all-routines
 - Drop all schemas: my-drop-all-schemas
 - Drop all tables: my-drop-all-tables
 - Drop all triggers: my-drop-all-trigger
@@ -27,6 +28,7 @@ install -d -m 0755 $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-analyze-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-count $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-data $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-drop-all-routines $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-schemas $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-users $RPM_BUILD_ROOT/usr/bin
@@ -50,6 +52,7 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-analyze-all-tables
 /usr/bin/my-compare-count
 /usr/bin/my-compare-data
+/usr/bin/my-drop-all-routines
 /usr/bin/my-drop-all-schemas
 /usr/bin/my-drop-all-tables
 /usr/bin/my-drop-all-users
@@ -70,6 +73,10 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-unlock-users
 
 %changelog
+
+* Mon Oct 6 2025 Rodrigo Tassinari 1.3.0
+- New tool: my-drop-all-routines
+- my-mirror: Partition length is now full size (rows * avg row length)
 
 * Fri Sep 19 2025 Rodrigo Tassinari 1.2.2
 - my-mirror: New max allowed packet size: 4Mb
