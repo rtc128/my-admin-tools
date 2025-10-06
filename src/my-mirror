@@ -27,8 +27,7 @@ function copy_all_grants()
 
 function copy_events()
 {
-	local USCHEMA=${SCHEMA^^}
-	write_out "Copying events [$USCHEMA]"
+	write_out "Copying events [$SCHEMA]"
 	mysqldump --login-path=$SRC --set-gtid-purged=off --no-create-info --no-data --events --skip-triggers $SCHEMA | mysql --login-path=$DST $SCHEMA || return 1;
 }
 
@@ -89,7 +88,7 @@ function copy_aws_startup()
 	copy_schema_grants || return 1
 	copy_table_grants || return 1
 	create_all_views || return 1
-	copy_full_routines || return 1
+	create_all_routines || return 1
 	copy_full_grants || return 1
 	copy_full_events || return 1
 	return 0
@@ -112,8 +111,7 @@ function copy_full_events()
 	local SCHEMA
 	write_out "Creating events"
 	for SCHEMA in `cat $SCHEMA_LIST_FILE`; do
-		local USCHEMA=${SCHEMA^^}
-		write_out "  $USCHEMA"
+		write_out "  $SCHEMA"
 		mysqldump --login-path=$SRC --set-gtid-purged=off --no-create-info --no-data --skip-lock-tables --events --skip-triggers $SCHEMA | mysql --login-path=$DST $SCHEMA || return 1
 	done
 }
@@ -140,17 +138,70 @@ function copy_full_grants()
 	rm $OUT_BUFF
 }
 
-function copy_full_routines()
+function create_all_routines()
 {
 	local SCHEMA
 	write_out "Creating routines"
 	for SCHEMA in `cat $SCHEMA_LIST_FILE`; do
 		local CANCEL=`cat $CANCEL_FILE`
 		[ $CANCEL -eq 0 ] || return 1
-		local USCHEMA=${SCHEMA^^}
-		write_out "   $USCHEMA"
-		mysqldump --login-path=$SRC --set-gtid-purged=off --no-create-info --no-data --skip-lock-tables --routines --skip-triggers $SCHEMA | mysql --login-path=$DST $SCHEMA || return 1
+
+		write_out "   $SCHEMA"
+
+		write_out "      Functions"
+		create_routines FUNCTION || return 1
+
+		write_out "      Procedures"
+		create_routines PROCEDURE || return 1
 	done
+}
+
+function create_routines()
+{
+	local OBJ_TYPE=$1
+	local DST_OBJ_LIST=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local SRC_OBJ_LIST=`mktemp /tmp/my-mirror.XXXXXX`
+	local SQL_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+
+	#list in src
+	local QUERY="select routine_name from information_schema.routines where routine_type = '$OBJ_TYPE' and routine_schema = '$SCHEMA' order by 1"
+	mysql --login-path=$SRC -N -e "$QUERY" >$SRC_OBJ_LIST 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $DST_OBJ_LIST $ERR_BUFF $SRC_OBJ_LIST $SQL_BUFF; return 1; }
+
+	#list routines in dst
+	#same query
+	mysql --login-path=$DST -N -e "$QUERY" >$DST_OBJ_LIST 2>$ERR_BUFF || return 1
+	local RC=$?
+	write_file_out $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $DST_OBJ_LIST $ERR_BUFF $SRC_OBJ_LIST $SQL_BUFF; return 1; }
+
+	#each object
+	for OBJ in `cat $SRC_OBJ_LIST`; do
+		#if it already exists in dst, ignore it
+		if grep -w $OBJ $DST_OBJ_LIST >/dev/null; then
+			continue
+		fi
+		local QUERY="show create $OBJ_TYPE $OBJ"
+		write_out "         $OBJ"
+		local TMP=`mktemp /tmp/my-mirror.XXXXXX`
+		mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA 2>$ERR_BUFF | awk -F '\t' '{print $3;}' | sed -e 's/\\n/\n/g' -e 's/\\t/\t/g' >$TMP
+		local SIZE=`stat -c %s $ERR_BUFF`
+		write_file_out $ERR_BUFF
+		[ $SIZE -eq 0 ] || { rm $TMP $DST_OBJ_LIST $ERR_BUFF $SRC_OBJ_LIST $SQL_BUFF; return 1; }
+		echo 'delimiter //' >$SQL_BUFF
+		cat $TMP >>$SQL_BUFF
+		echo '//' >>$SQL_BUFF
+		rm $TMP
+		mysql --login-path=$DST $SCHEMA <$SQL_BUFF 2>$ERR_BUFF
+		local RC=$?
+		write_file_out $ERR_BUFF
+		[ $RC -eq 0 ] || { rm $DST_OBJ_LIST $ERR_BUFF $SRC_OBJ_LIST $SQL_BUFF; return 1; }
+	done
+
+	rm $DST_OBJ_LIST $ERR_BUFF $SRC_OBJ_LIST $SQL_BUFF
 }
 
 function create_all_tables()
@@ -163,8 +214,7 @@ function create_all_tables()
 	local TABLE_LIST=`mktemp /tmp/my-mirror.XXXXXX`
 	local SQL_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	for SCHEMA in `cat $SCHEMA_LIST_FILE`; do
-		local USCHEMA=${SCHEMA^^}
-		write_out "   $USCHEMA"
+		write_out "   $SCHEMA"
 		#list tables in dst
 		local QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
 		mysql --login-path=$DST -N -e "$QUERY" >$DST_OBJ_LIST 2>$ERR_BUFF
@@ -215,8 +265,7 @@ function create_all_views()
 	local SCHEMA 
 	write_out "Creating views"
 	for SCHEMA in `cat $SCHEMA_LIST_FILE`; do
-		local USCHEMA=${SCHEMA^^}
-		write_out "   $USCHEMA"
+		write_out "   $SCHEMA"
 		copy_views || return 1
 	done
 	return 0
@@ -240,12 +289,6 @@ function copy_one_role()
 	copy_grants "$ROLE" || return 1
 }
 
-function copy_routines()
-{
-	write_out "Copying routines [$SCHEMA]"
-	mysqldump --login-path=$SRC --set-gtid-purged=off --skip-lock-tables --no-create-info --no-data --routines --skip-triggers $SCHEMA | sed -e "s/\<DEFINER=\`.*\`@\`%\`/DEFINER=\`$SCHEMA\`/" | mysql --login-path=$DST $SCHEMA || return 1;
-}
-
 function copy_tables()
 {
 	if [ $AWS -eq 0 ]; then
@@ -255,6 +298,7 @@ function copy_tables()
 			cp "$CUSTOM_TABLE_LIST_FILE" "$TABLE_LIST_FILE" || return 1
 		fi
 	fi
+	return 1
 	: >>$LOCK_FILE
 	LIST=`seq 1 $TH_COUNT`
 	for I in $LIST; do
@@ -279,8 +323,7 @@ function copy_all_tables()
 		TABLE_LIST_FILE="$DST_WORK_DIR/schemas/$SCHEMA"
 		#remove all comments
 		sed -i -e "s/^#//" "$TABLE_LIST_FILE"
-		local USCHEMA=${SCHEMA^^}
-		write_out "   $USCHEMA"
+		write_out "   $SCHEMA"
 		copy_tables || return 1
 	done
 }
@@ -350,7 +393,7 @@ function copy_views()
 
 	#list views in src
 	local QUERY="select table_name from information_schema.views where table_schema = '$SCHEMA' order by 1"
-	mysql --login-path=$SRC -N -e "$QUERY" >$SRC_OBJ_LIST 2>$ERR_BUFF || return 1
+	mysql --login-path=$SRC -N -e "$QUERY" >$SRC_OBJ_LIST 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
 	[ $RC -eq 0 ] || { rm $DST_OBJ_LIST $ERR_BUFF $SRC_OBJ_LIST $SQL_BUFF; return 1; }
@@ -418,8 +461,7 @@ function create_all_schemas()
 	local SCHEMA 
 	write_out "Creating schemas"
 	for SCHEMA in `cat $SCHEMA_LIST_FILE`; do
-		local USCHEMA=${SCHEMA^^}
-		write_out "   $USCHEMA"
+		write_out "   $SCHEMA"
 		local QUERY="create schema if not exists $SCHEMA"
 		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX` || return 1
 		mysql --login-path=$DST -e "$QUERY" 2>$ERR_BUFF 
@@ -538,11 +580,10 @@ function list_schemas()
 
 function list_tables()
 {
-	local USCHEMA=${SCHEMA^^}
-	write_out "   $USCHEMA"
+	write_out "   $SCHEMA"
 
 	TABLE_PRE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
-	QUERY="select table_name, round(table_rows * 1.1, 0) from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
+	QUERY="select table_name, round(table_rows * 1.1, 0), avg_row_length from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
 	mysql --login-path=$SRC -N -e "$QUERY" >$TABLE_PRE_LIST_FILE || { rm $TABLE_PRE_LIST_FILE; return 1; }
 
 	#just copy or split each table
@@ -563,16 +604,20 @@ function list_tables_th()
 	local FULL_TABLE=`get_next_pre_table`
 	while [ -n "$FULL_TABLE" ]; do
 		local TABLE=`echo $FULL_TABLE | awk '{ print $1; }'`
-		local ROWS=`echo $FULL_TABLE | awk '{ print $2; }'`
+		local TABLE_ROWS=`echo $FULL_TABLE | awk '{ print $2; }'`
+		local ROW_SIZE=`echo $FULL_TABLE | awk '{ print $3; }'`
+		local TABLE_SIZE=$((TABLE_ROWS * ROW_SIZE))
+
 		#if no limit defined, just mount table list
-		if [ $LIMIT_TRANSACTION_LENGTH_ROWS -eq 0 ]; then
+		if [ $LIMIT_TRANSACTION_LENGTH_SIZE -eq 0 ]; then
 			echo $TABLE >>$TABLE_LIST_FILE
 		else
 			#split tables
 			local RC=0
 			local LINE
-			if [ $ROWS -gt $LIMIT_TRANSACTION_LENGTH_ROWS ]; then
-				split_table "$TABLE" $ROWS || { echo 1 >$CANCEL_FILE; break; }
+			if [ $TABLE_SIZE -gt $LIMIT_TRANSACTION_LENGTH_SIZE_BYTES ]; then
+				LIMIT_TRANSACTION_LENGTH_ROWS=$((LIMIT_TRANSACTION_LENGTH_SIZE_BYTES/ROW_SIZE))
+				split_table "$TABLE" $TABLE_ROWS || { echo 1 >$CANCEL_FILE; break; }
 			else
 				echo "$TABLE" >>$TABLE_LIST_FILE
 			fi
@@ -647,11 +692,11 @@ function print_options()
 	if [ $ONLY_TABLE_STRUCTURE -eq 1 ]; then
 		write_out "Only table structure: enabled"
 	fi
-	if [ $LIMIT_TRANSACTION_LENGTH_DAYS -gt 0 ]; then
+	if (( $(echo "$LIMIT_TRANSACTION_LENGTH_DAYS > 0" | bc -l ) )); then
 		write_out "Partition length (days): $LIMIT_TRANSACTION_LENGTH_DAYS"
 	fi
-	if [ $LIMIT_TRANSACTION_LENGTH_ROWS -gt 0 ]; then
-		write_out "Partition length (rows): $LIMIT_TRANSACTION_LENGTH_ROWS"
+	if [ $LIMIT_TRANSACTION_LENGTH_SIZE -gt 0 ]; then
+		write_out "Partition length (size): ${LIMIT_TRANSACTION_LENGTH_SIZE}G"
 	fi
 	if [ $RESUME -eq 1 ]; then
 		write_out "Resume data copy mode: ON"
@@ -673,7 +718,7 @@ function run()
 	DST=client
 	FINISH_MODE=0
 	LIMIT_TRANSACTION_LENGTH=
-	LIMIT_TRANSACTION_LENGTH_ROWS=0
+	LIMIT_TRANSACTION_LENGTH_SIZE=0
 	LIMIT_TRANSACTION_LENGTH_DAYS=0
 	ONLY_TRIGGERS=0
 	ONLY_TABLE_STRUCTURE=0
@@ -747,11 +792,12 @@ function run()
 	local TMP_LOG_FILE=`mount_log_path` || return 1
 	write_out "Log file: $TMP_LOG_FILE"
 	LOG_FILE="$TMP_LOG_FILE"
-	print_options
+	print_options || return 1
 
 	CANCEL_FILE=`mktemp /tmp/my-mirror.XXXXXX`
 	echo 0 >$CANCEL_FILE || return 1
 
+	LIMIT_TRANSACTION_LENGTH_SIZE_BYTES=$((LIMIT_TRANSACTION_LENGTH_SIZE * 1024 * 1024 * 1024))
 	if [ $AWS -eq 1 ]; then
 		copy_aws $*
 	else
@@ -1096,7 +1142,7 @@ function split_table_pk()
 	local UTABLE_NAME="${TABLE_NAME^^}"
 	local UCOL_NAME="${COL_NAME^^}"
 
-	write_out "      Partitioning table $UTABLE_NAME by PK ($UCOL_NAME)"
+	write_out "      Partitioning table $UTABLE_NAME by PK ($UCOL_NAME) ($LIMIT_TRANSACTION_LENGTH_ROWS rows per partition)"
 
 	#get min
 	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
@@ -1224,7 +1270,7 @@ function split_table_rownum()
 	local ROWS="$2"
 	local UTABLE_NAME="${TABLE_NAME^^}"
 
-	write_out "      Partitioning table $UTABLE_NAME by row number"
+	write_out "      Partitioning table $UTABLE_NAME by row number ($LIMIT_TRANSACTION_LENGTH_ROWS rows per partition)"
 	local FIRST=1
 	while [ $FIRST -le $ROWS ]; do
 		local LAST=$((FIRST+LIMIT_TRANSACTION_LENGTH_ROWS-1))
@@ -1298,9 +1344,10 @@ function usage()
 	echo "   -i: Ignore tables listed in <file>"
 	echo "   -k: Keep table structure: if destination table already exists, dont't recreate it, just copy new records."
 	echo "   -l: Limit table partition size when reading data from source table."
-	echo "		<limit>: must be in the following format: <rows>/<days>"
-	echo "		Each table that has more than <rows> rows is splitted in partitions. Split rule: if such table has an indexed timestamp column, each partition will have <days> days. If not, each partition wil have <rows> rows."
-	echo "			<rows>: Min: 10000. Max: 99.999.999"
+	echo "		<limit>: must be in the following format: <size>/<days>"
+	echo "		Each table that has more than <size> Gb is splitted in partitions. Split rule: if such table has an indexed timestamp column, each partition will have <days> days. If not, each partition wil have <size> Gb."
+	echo "		Size is calculated from table statistics (average row length)."
+	echo "			<size>: Min: 1. Max: 999.999"
 	echo "			<days>: Min: 1. Max: 100"
 	echo "   -s: Use login path <login path> as source instance"
 	echo "       Required."
@@ -1333,14 +1380,14 @@ function validate_options()
 			usage
 			return 1
 		fi
-		LIMIT_TRANSACTION_LENGTH_ROWS=`echo $LIMIT_TRANSACTION_LENGTH | cut -d / -f 1`
+		LIMIT_TRANSACTION_LENGTH_SIZE=`echo $LIMIT_TRANSACTION_LENGTH | cut -d / -f 1`
 		LIMIT_TRANSACTION_LENGTH_DAYS=`echo $LIMIT_TRANSACTION_LENGTH | cut -d / -f 2`
 		if [ -z "$LIMIT_TRANSACTION_LENGTH_DAYS" ]; then
 			write_out "Invalid value for transaction length limit"
 			usage
 			return 1
 		fi
-		LIMIT_TRANSACTION_LENGTH_SECS=$((LIMIT_TRANSACTION_LENGTH_DAYS*60*60*24))
+		LIMIT_TRANSACTION_LENGTH_SECS=`echo scale=0\; $LIMIT_TRANSACTION_LENGTH_DAYS \* 60 \* 60 \* 24 / 1 | bc`
 		if [ $LIMIT_TRANSACTION_LENGTH_SECS -eq 0 ]; then
 			write_out "Invalid value for transaction length limit"
 			usage
@@ -1348,7 +1395,7 @@ function validate_options()
 		fi
 
 		#transaction length limit
-		if [ $LIMIT_TRANSACTION_LENGTH_ROWS -lt 10000 -o $LIMIT_TRANSACTION_LENGTH_ROWS -gt 99999999 ]; then
+		if [ $LIMIT_TRANSACTION_LENGTH_SIZE -lt 1 -o $LIMIT_TRANSACTION_LENGTH_SIZE -gt 999999 ]; then
 			write_out "Invalid value for transaction length limit"
 			usage
 			return 1
