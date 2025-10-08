@@ -1184,7 +1184,7 @@ function split_table_pk()
 		rm $ERR_BUFF
 		while [ $RC -ne 0 ]; do
 			rm $OUT_BUFF
-			if [ $COUNT_RETRY -eq $MAX_RETRY_COUNT ]; then
+			if [ $RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
 				write_out "      Error reading partition in table $UTABLE_NAME - Max retries reached"
 				return 1
 			fi
