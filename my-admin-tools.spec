@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.3.0
+Version:			 1.3.1
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -73,6 +73,9 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-unlock-users
 
 %changelog
+
+* Wed Oct 8 2025 Rodrigo Tassinari 1.3.1
+- my-mirror: fix when copying with AWS mode disabled
 
 * Mon Oct 6 2025 Rodrigo Tassinari 1.3.0
 - New tool: my-drop-all-routines
