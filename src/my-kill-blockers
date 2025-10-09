@@ -6,6 +6,10 @@ CONNECT_TIMEOUT=3
 
 function kill_row_blockers()
 {
+	local USER_FILTER="p.user <> 'root' and"
+	if [ $ALL_USERS -eq 1 ]; then
+		USER_FILTER=
+	fi
 	QUERY="select
 			w1.blocking_pid as pid,
 			p.user,
@@ -15,7 +19,7 @@ function kill_row_blockers()
 			sys.innodb_lock_waits w1
 			join information_schema.processlist p on w1.blocking_pid = p.id
 		where
-			p.user <> 'root' and
+			$USER_FILTER
 			w1.wait_age_secs + 10800 >= $MIN_TIME and
 			not exists (select 1 from sys.innodb_lock_waits w2 where w2.waiting_pid = w1.blocking_pid)
 		order by
@@ -54,6 +58,10 @@ function kill_row_blockers()
 
 function kill_metadata_blockers()
 {
+	local USER_FILTER="p.user <> 'root' and"
+	if [ $ALL_USERS -eq 1 ]; then
+		USER_FILTER=
+	fi
 	QUERY="select
 			w1.blocking_pid,
 			p.user,
@@ -63,7 +71,7 @@ function kill_metadata_blockers()
 			sys.schema_table_lock_waits w1
 			join information_schema.processlist p on w1.blocking_pid = p.id
 		where
-			p.user <> 'root' and
+			$USER_FILTER
 			w1.waiting_query_secs >= $MIN_TIME and
 			not exists (select 1 from sys.schema_table_lock_waits w2 where w2.waiting_pid = w1.blocking_pid)
 		order by
@@ -102,6 +110,7 @@ function kill_metadata_blockers()
 
 function run()
 {
+	ALL_USERS=0
 	WORKING_DIR=/var/lib/my-admin-tools/my-kill-blockers
 	EXEC_COUNT=1
 	INTERVAL=60
@@ -113,8 +122,10 @@ function run()
 	ROW=1
 	VERBOSE=0
 
-	while getopts ":hi:l:mn:rs:v" OPT; do
+	while getopts ":ahi:l:mn:rs:v" OPT; do
 		case $OPT in
+			a)
+				ALL_USERS=1;;
 			h)
 				usage
 				return 0;;
@@ -246,7 +257,8 @@ function usage()
 	if [ -n "$ERR" ]; then
 		echo "Error: $ERR" >&2
 	fi
-	echo "Usage: $0 [ -h ] [ -i <interval> ] [ -l <login path> ] [ -m ] [ -n <count> ] [ -s <count> [ -v ] <time>"
+	echo "Usage: $0 [ -a ] [ -h ] [ -i <interval> ] [ -l <login path> ] [ -m ] [ -n <count> ] [ -s <count> [ -v ] <time>"
+	echo "   -a: Do not ignore blocking sessions opened by root"
 	echo "   -h: Show this help"
 	echo "   -i: Set the interval between executions to <interval> seconds."
 	echo "      Default: 60"
