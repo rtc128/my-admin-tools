@@ -1003,7 +1003,6 @@ function copy_one_table_interval()
 
 	local SPLIT_TYPE=`echo $LINE | cut -d : -f 2`
 	local COL_NAME=`echo $LINE | cut -d : -f 3`
-	local UCOL_NAME=${COL_NAME^^}
 	local FIRST=`echo $LINE | cut -d : -f 4`
 	local LAST=`echo $LINE | cut -d : -f 5`
 
@@ -1021,30 +1020,30 @@ function copy_one_table_interval()
 		if [ -n "$FIRST" ]; then
 			 FIRST_EXT="`date -d @$FIRST +\"%Y-%m-%d %H:%M:%S\"`"
 			 LAST_EXT="`date -d @$LAST +\"%Y-%m-%d %H:%M:%S\"`"
-			 UTABLE_WITH_INT="$UTABLE ['$COL_NAME' $FIRST_EXT to $LAST_EXT]"
+			 TABLE_WITH_INT="$TABLE ['$COL_NAME' $FIRST_EXT to $LAST_EXT]"
 			 WHERE="$COL_NAME between '$FIRST_EXT' and '$LAST_EXT'"
 		else
-			 UTABLE_WITH_INT="$UTABLE ['$COL_NAME' NULL]"
+			 TABLE_WITH_INT="$TABLE ['$COL_NAME' NULL]"
 			 WHERE="$COL_NAME is null"
 		fi
 	fi
 	if [ $BY_PK -eq 1 ]; then
-		local UTABLE_WITH_INT="$UTABLE [$UCOL_NAME $FIRST to $LAST]"
-		local WHERE="$UCOL_NAME between $FIRST and $LAST"
+		local TABLE_WITH_INT="$TABLE ['$COL_NAME' $FIRST to $LAST]"
+		local WHERE="$COL_NAME between $FIRST and $LAST"
 	fi
 	if [ $BY_ROWNUM -eq 1 ]; then
 		local COUNT=$((LAST-FIRST+1))
-		local UTABLE_WITH_INT="$UTABLE [rows #$FIRST to #$LAST]"
+		local TABLE_WITH_INT="$TABLE [rows #$FIRST to #$LAST]"
 		local WHERE="true limit $FIRST, $COUNT"
 	fi
-	write_out "      $UTABLE_WITH_INT starting"
+	write_out "      Table '$TABLE_WITH_INT' starting"
 
 	local L_EXIST
 	local L_RETRY_COUNT
 
 	if [ -n "$IGNORE_LIST_FILE" -a -f "$IGNORE_LIST_FILE" ]; then
 		if grep -wi $TABLE "$IGNORE_LIST_FILE" >/dev/null; then
-			write_out "      $UTABLE is ignored"
+			write_out "      Table '$TABLE' is ignored"
 			return 0
 		fi
 	fi
@@ -1072,13 +1071,13 @@ function copy_one_table_interval()
 	while [ $EXP_ERR_LEN -ne 0 -o $IMP_ERR_LEN -ne 0 ]; do
 		[ $CANCEL -eq 0 ] || return 1
 		if [ $RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
-			local TXT="$UTABLE_WITH_INT: error again"
+			local TXT="Table '$TABLE_WITH_INT': error again"
 			write_out "$TXT"
 			echo 1 >$CANCEL_FILE
 			return 1
 		fi
 		((RETRY_COUNT++))
-		local TXT="  $UTABLE_WITH_INT: error - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT/#$MAX_RETRY_COUNT)"
+		local TXT="   Table '$TABLE_WITH_INT': error - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT/#$MAX_RETRY_COUNT)"
 		write_out "$TXT"
 		sleep $RETRY_INTERVAL
 		local EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
@@ -1092,7 +1091,7 @@ function copy_one_table_interval()
 		rm $IMP_ERR_BUFF
 		local CANCEL=`cat $CANCEL_FILE`
 	done
-	write_out "      $UTABLE_WITH_INT finished"
+	write_out "      Table '$TABLE_WITH_INT' finished"
 	return 0
 }
 
@@ -1156,11 +1155,10 @@ function split_table()
 	[ $RC -eq 0 ] || { rm $DESC; return 1; }
 
 	write_out "      Checking if table '$TABLE' has an indexed timestamp column"
-	local COL_NAME=`grep -Ewi -m 1 '(datetime|timestamp).*mul' $DESC | awk '{print $1;}'`
-	local UCOL_NAME=${COL_NAME^^}
+	local COL_NAME=`grep -Ewi -m 1 '(date|datetime|timestamp).*mul' $DESC | awk '{print $1;}'`
 	if [ -n "$COL_NAME" ]; then
 		rm $DESC
-		write_out "      Found an indexed timestamp column in table '$TABLE': $UCOL_NAME"
+		write_out "      Found an indexed timestamp column in table '$TABLE': $COL_NAME"
 		split_table_ts "$TABLE" "$COL_NAME" || return 1
 		write_out "      Partitioning for table $TABLE finished"
 		return 0
@@ -1195,9 +1193,8 @@ function split_table_pk()
 {
 	local TABLE_NAME="$1"
 	local COL_NAME="$2"
-	local UCOL_NAME="${COL_NAME^^}"
 
-	write_out "      Partitioning table '$TABLE_NAME' by PK ($UCOL_NAME) ($LIMIT_TRANSACTION_LENGTH_ROWS rows per partition)"
+	write_out "      Partitioning table '$TABLE_NAME' by PK ($COL_NAME) ($LIMIT_TRANSACTION_LENGTH_ROWS rows per partition)"
 
 	#get min
 	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
@@ -1268,10 +1265,8 @@ function split_table_ts()
 {
 	local TABLE_NAME="$1"
 	local COL_NAME="$2"
-	local UTABLE_NAME="${TABLE_NAME^^}"
-	local UCOL_NAME="${COL_NAME^^}"
 
-	write_out "      Partitioning table $UTABLE_NAME by timestamp ($UCOL_NAME)"
+	write_out "      Partitioning table '$TABLE_NAME' by timestamp ($COL_NAME)"
 	#get min
 	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
@@ -1326,9 +1321,8 @@ function split_table_rownum()
 {
 	local TABLE_NAME="$1"
 	local ROWS="$2"
-	local UTABLE_NAME="${TABLE_NAME^^}"
 
-	write_out "      Partitioning table $UTABLE_NAME by row number ($LIMIT_TRANSACTION_LENGTH_ROWS rows per partition)"
+	write_out "      Partitioning table '$TABLE_NAME' by row number ($LIMIT_TRANSACTION_LENGTH_ROWS rows per partition)"
 	local FIRST=1
 	while [ $FIRST -le $ROWS ]; do
 		local LAST=$((FIRST+LIMIT_TRANSACTION_LENGTH_ROWS-1))
