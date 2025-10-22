@@ -666,6 +666,12 @@ function list_tables_th()
 			local LINE
 			if [ $TABLE_SIZE -gt $LIMIT_TRANSACTION_LENGTH_SIZE_BYTES ]; then
 				LIMIT_TRANSACTION_LENGTH_ROWS=$((LIMIT_TRANSACTION_LENGTH_SIZE_BYTES/ROW_SIZE))
+				#check if there is a forced limit
+				if [ -n "$MY_MIRROR_TXN_LEN_FORCE_LIMIT" ]; then
+					if [ $MY_MIRROR_TXN_LEN_FORCE_LIMIT -lt $LIMIT_TRANSACTION_LENGTH_ROWS ]; then
+						LIMIT_TRANSACTION_LENGTH_ROWS=$MY_MIRROR_TXN_LEN_FORCE_LIMIT
+					fi
+				fi
 				split_table "$TABLE" $TABLE_ROWS || { echo 1 >$CANCEL_FILE; break; }
 			else
 				echo "$TABLE" >>$TABLE_LIST_FILE
@@ -1401,6 +1407,7 @@ function usage()
 	echo "		Size is calculated from table statistics (average row length)."
 	echo "			<size>: Min: 1. Max: 999.999"
 	echo "			<days>: Min: 1. Max: 100"
+	echo "      If environment variable MY_MIRROR_TXN_LEN_FORCE_LIMIT is set, for tables partitioned by PK, each partition will have no more than <MY_MIRROR_TXN_LEN_FORCE_LIMIT> rows, even if average row length is very small."
 	echo "   -s: Use login path <login path> as source instance"
 	echo "       Required."
 	echo "   -n: Number of threads used in the following operations: table splitting (if transaction length limit [-l option ] is active); table data copy"
