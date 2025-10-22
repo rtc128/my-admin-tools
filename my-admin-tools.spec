@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.3.4
+Version:			 1.4.0
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -20,6 +20,7 @@ Administration tools for MySQL:
 - Kill sessions: my-kill-sessions
 - Mirror a database (copy objects/schemas): my-mirror
 - Truncate all tables: my-truncate-all-tables
+- Validate a replica created with my-mirror: my-val-mirror
 
 %prep
 %setup -q
@@ -49,6 +50,7 @@ install -m 0755 src/my-repl-skip-failed-transaction $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-replace-table $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-truncate-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 
 %files
 /usr/bin/my-analyze-all-tables
@@ -74,8 +76,12 @@ install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-replace-table
 /usr/bin/my-truncate-all-tables
 /usr/bin/my-unlock-users
+/usr/bin/my-val-mirror
 
 %changelog
+
+* Wed Oct 22 2025 Rodrigo Tassinari 1.4.0
+- New tool: my-val-mirror
 
 * Mon Oct 20 2025 Rodrigo Tassinari 1.3.4
 - my-mirror: More friendly logs
