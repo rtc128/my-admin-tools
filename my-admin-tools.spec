@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.4.0
+Version:			 1.4.1
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -79,6 +79,9 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Wed Oct 22 2025 Rodrigo Tassinari 1.4.1
+- my-mirror: new environment variable: MY_MIRROR_TXN_LEN_FORCE_LIMIT
 
 * Wed Oct 22 2025 Rodrigo Tassinari 1.4.0
 - New tool: my-val-mirror
