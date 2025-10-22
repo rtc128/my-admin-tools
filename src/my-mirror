@@ -575,7 +575,12 @@ function get_next_table()
 	local TABLE
 	{
 		flock 3
-		TABLE=`grep -v -m 1 '#' $TABLE_LIST_FILE`
+		#count number of tables
+		local COUNT=`cat $TABLE_LIST_FILE | wc -l`
+		#generate a random number from 1 to COUNT
+		local RND=`printf %d 0x$(openssl rand -hex 4)`
+		local POS=$((RND % COUNT + 1))
+		TABLE=`grep -v -m $POS '^#' $TABLE_LIST_FILE | tail -n 1`
 		#if not found, return
 		[ -n "$TABLE" ] || return
 		#comment retrieved table
@@ -934,7 +939,7 @@ function copy_one_table()
 			return 0
 		fi
 	fi
-	write_out "      Starting to copy table '$TABLE'"
+	write_out "      Starting table '$TABLE'"
 
 	if [ $CREATE_TABLES -eq 0 ]; then
 		L_EXIST=`table_exists $L_TABLE`
@@ -980,7 +985,7 @@ function copy_one_table()
 	rm $EXP_ERR_BUFF $IMP_ERR_BUFF
 	local CANCEL=`cat $CANCEL_FILE`
 	if [ $CANCEL -eq 0 ]; then
-		write_out "      Finished copying table '$TABLE'"
+		write_out "      Finished table '$TABLE'"
 	fi
 	return $CANCEL
 }
@@ -1042,7 +1047,7 @@ function copy_one_table_interval()
 		local TABLE_WITH_INT="$TABLE [rows #$FIRST to #$LAST]"
 		local WHERE="true limit $FIRST, $COUNT"
 	fi
-	write_out "      Table '$TABLE_WITH_INT' starting"
+	write_out "      Starting table '$TABLE_WITH_INT'"
 
 	local L_EXIST
 	local L_RETRY_COUNT
@@ -1097,7 +1102,7 @@ function copy_one_table_interval()
 		rm $IMP_ERR_BUFF
 		local CANCEL=`cat $CANCEL_FILE`
 	done
-	write_out "      Table '$TABLE_WITH_INT' finished"
+	write_out "      Finished table '$TABLE_WITH_INT'"
 	return 0
 }
 
