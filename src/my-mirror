@@ -577,14 +577,16 @@ function get_next_table()
 		flock 3
 		#count number of tables
 		local COUNT=`cat $TABLE_LIST_FILE | wc -l`
-		#generate a random number from 1 to COUNT
-		local RND=`printf %d 0x$(openssl rand -hex 4)`
-		local POS=$((RND % COUNT + 1))
-		TABLE=`grep -v -m $POS '^#' $TABLE_LIST_FILE | tail -n 1`
-		#if not found, return
-		[ -n "$TABLE" ] || return
-		#comment retrieved table
-		sed -i -e "s/^$TABLE$/#$TABLE/" $TABLE_LIST_FILE
+		if [ $COUNT -gt 0 ]; then
+			#generate a random number from 1 to COUNT
+			local RND=`printf %d 0x$(openssl rand -hex 4)`
+			local POS=$((RND % COUNT + 1))
+			TABLE=`grep -v -m $POS '^#' $TABLE_LIST_FILE | tail -n 1`
+			#if not found, return
+			[ -n "$TABLE" ] || return
+			#comment retrieved table
+			sed -i -e "s/^$TABLE$/#$TABLE/" $TABLE_LIST_FILE
+		fi
 	} 3<$LOCK_FILE
 	echo $TABLE
 }
@@ -1031,10 +1033,10 @@ function copy_one_table_interval()
 		if [ -n "$FIRST" ]; then
 			 FIRST_EXT="`date -d @$FIRST +\"%Y-%m-%d %H:%M:%S\"`"
 			 LAST_EXT="`date -d @$LAST +\"%Y-%m-%d %H:%M:%S\"`"
-			 TABLE_WITH_INT="$TABLE ['$COL_NAME' $FIRST_EXT to $LAST_EXT]"
+			 TABLE_WITH_INT="$TABLE [$COL_NAME $FIRST_EXT to $LAST_EXT]"
 			 WHERE="$COL_NAME between '$FIRST_EXT' and '$LAST_EXT'"
 		else
-			 TABLE_WITH_INT="$TABLE ['$COL_NAME' NULL]"
+			 TABLE_WITH_INT="$TABLE [$COL_NAME NULL]"
 			 WHERE="$COL_NAME is null"
 		fi
 	fi
