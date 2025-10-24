@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.4.3
+Version:			 1.4.4
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -79,6 +79,10 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Fri Oct 24 2025 Rodrigo Tassinari 1.4.4
+- my-mirror: copy virtual columns: fixed blocking bug
+- my-val-mirror: new validation architecture
 
 * Wed Oct 22 2025 Rodrigo Tassinari 1.4.3
 - my-mirror: Fix in random generation
