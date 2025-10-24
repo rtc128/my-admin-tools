@@ -490,7 +490,7 @@ function copy_virtual_columns()
 		local TABLE_SCHEMA=`echo $LINE | awk '{ print $1; }'`
 		local TABLE_NAME=`echo $LINE | awk '{ print $2; }'`
 		local COLUMN_NAME=`echo $LINE | awk '{ print $3; }'`
-		copy_one_virtual_column $TABLE_SCHEMA $TABLE_NAME $COLUMN_NAME || return 1
+		copy_one_virtual_column "$TABLE_SCHEMA" "$TABLE_NAME" "$COLUMN_NAME" || return 1
 	done <$BUFF
 	rm $BUFF
 }
@@ -1110,14 +1110,18 @@ function copy_one_table_interval()
 
 function copy_one_virtual_column()
 {
+	local SCHEMA="$1"
+	local TABLE="$2"
+	local COLUMN="$3"
+
 	local BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local QUERY="show create table $TABLE_SCHEMA.$TABLE"
-	mysql --login-path=$SRC -N -e "$QUERY" | sed -e 's/\\n/\n/g' | grep -m 1 -w $COLUMN_NAME | sed -e 's/,$//' | sed -e 's/\\/\\\\/g' >$BUFF || return 1
+	local QUERY="show create table $SCHEMA.$TABLE"
+	mysql --login-path=$SRC -N -e "$QUERY" | sed -e 's/\\n/\n/g' | grep -m 1 -w $COLUMN | sed -e 's/,$//' | sed -e 's/\\/\\\\/g' >$BUFF || return 1
 	local NEW_COL=`cat $BUFF`
-	mysql --login-path=$SRC -N -e "$QUERY" | sed -e 's/\\n/\n/g' | grep -m 1 -B 1 -w $COLUMN_NAME | head -n 1 | awk -F \  '{ print $1; }' >$BUFF || return 1
+	mysql --login-path=$SRC -N -e "$QUERY" | sed -e 's/\\n/\n/g' | grep -m 1 -B 1 -w $COLUMN | head -n 1 | awk -F \  '{ print $1; }' >$BUFF || return 1
 	local PREV_COL=`cat $BUFF`
 	rm $BUFF
-	local QUERY="alter table $TABLE_SCHEMA.$TABLE add $NEW_COL after $PREV_COL"
+	local QUERY="alter table $SCHEMA.$TABLE add $NEW_COL after $PREV_COL"
 	mysql --login-path=$DST -e "$QUERY" || return 1
 }
 
