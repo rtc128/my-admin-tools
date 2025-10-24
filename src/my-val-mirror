@@ -1,7 +1,10 @@
 #!/bin/bash
 
+BLOCK_LENGTH=20000
+SECONDS_BEHIND=15
 MAX_RETRY_COUNT=3
 RETRY_INTERVAL=10
+COMPARE_INTERVAL_DAYS=20
 
 if [ "$DEBUG" == "1" ]; then
    set -x
@@ -32,179 +35,21 @@ function count_columns()
 
 function do_validation()
 {
-	local COL_POS
-	local COLUMN
-	local DST_COUNT
-	local QUERY
-	local SRC_COUNT
-	local TABLE
+	local UNIX_NOW=`date +%s`
+	local UNIX_MAX_TIME=$((UNIX_NOW-$SECONDS_BEHIND))
+	MAX_TIME="`date -d @$UNIX_MAX_TIME +\"%Y-%m-%d %H:%M:%S\"`"
 
-	local OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	while [ $CANCEL -eq 0 ]; do
-		COL_POS=$((RANDOM % COL_COUNT))
-		QUERY="select
-				table_name,
-				column_name
-			from
-				information_schema.columns
-			where
-				table_schema = '$SCHEMA' and
-				lower(column_type) in ('date', 'datetime', 'timestamp')
-			limit
-				$COL_POS, 1"
-		mysql --login-path=$SRC -N -e "$QUERY" >$OUT_BUFF 2>$ERR_BUFF || return 1
-		local RC=$?
-		write_file_out $ERR_BUFF
-		rm $ERR_BUFF
-		[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
-		TABLE=`cut -f 1 $OUT_BUFF`
-		COLUMN=`cut -f 2 $OUT_BUFF`
+	DATA_DIR="/tmp/my-val-mirror"
+	mkdir -p "$DATA_DIR" || return 1
+	rm -fr "$DATA_DIR/"* || return 1
 
-		local UNIX_NOW=`date +%s`
-		local UNIX_REF_TS=$((UNIX_NOW-30))
-		local REF_TS="`date -d @$UNIX_REF_TS +\"%Y-%m-%d %H:%M:%S\"`"
-
-		QUERY="select
-				count(1)
-			from
-				\`$TABLE\`
-			where
-				\`$COLUMN\` < '$REF_TS'"
-		write_out "Table: '$TABLE', Column: '$COLUMN', Ref timestamp: $REF_TS"
-
-		mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF || return 1
-		local RC=$?
-		write_file_out $ERR_BUFF
-		rm $ERR_BUFF
-		[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
-		SRC_COUNT=`cat $OUT_BUFF`
-		write_out "   Count in source: $SRC_COUNT"
-
-		mysql --login-path=$DST -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF || return 1
-		local RC=$?
-		write_file_out $ERR_BUFF
-		rm $ERR_BUFF
-		[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
-		DST_COUNT=`cat $OUT_BUFF`
-		write_out "   Count in destination: $DST_COUNT"
-
-		if [ $SRC_COUNT -ne $DST_COUNT ]; then
-			write_out "*** FOUND A DIFFERENCE ***"
-			break
-		fi
-	done
-	rm $OUT_BUFF
-}
-
-function list_schemas()
-{
-	local OUT_FILE="$1"
-	local QUERY="select schema_name from information_schema.schemata where schema_name not in ('mysql', 'information_schema', 'performance_schema', 'sys')"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	if [ -n "$OUT_FILE" ]; then
-		mysql --login-path=$SRC -N -e "$QUERY" >"$OUT_FILE" 2>$ERR_BUFF
-	else
-		mysql --login-path=$SRC -N -e "$QUERY" 2>$ERR_BUFF
-	fi
-	local RC=$?
-	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
-	[ $RC -eq 0 ] || return 1
-	return 0
-}
-
-function list_tables()
-{
-	write_out "   $SCHEMA"
-
-	TABLE_PRE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local QUERY="select table_name, round(table_rows * 1.1, 0), avg_row_length from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
-	mysql --login-path=$SRC -N -e "$QUERY" 2>$ERR_BUFF | sed -e 's/\r//' >$TABLE_PRE_LIST_FILE
-	local SIZE=`stat -c %s $ERR_BUFF`
-	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
-	[ $SIZE -eq 0 ] || { rm $TABLE_PRE_LIST_FILE; return 1; }
-
-	if [ $LIMIT_TRANSACTION_LENGTH_SIZE -eq 0 ]; then
-		awk '{print $1;}' $TABLE_PRE_LIST_FILE >$TABLE_LIST_FILE || { rm $TABLE_PRE_LIST_FILE; return 1; }
-		local RC=$?
-		rm $TABLE_PRE_LIST_FILE
-		return $RC
-	fi
-
-	#just copy or split each table
-	: >>$LOCK_FILE
-	LIST=`seq 1 $TH_COUNT`
-	for I in $LIST; do
-		list_tables_th &
-	done
+	#for each table, create a thread
+	while read -r LINE; do
+		local TABLE="`echo $LINE | cut -d : -f 1`"
+		local COLUMN="`echo $LINE | cut -d : -f 2`"
+		validate_th "$TABLE" "$COLUMN" &
+	done <$LIST_FILE
 	wait
-
-	rm $TABLE_PRE_LIST_FILE
-	local CANCEL=`cat $CANCEL_FILE`
-	return $CANCEL
-}
-
-function list_tables_th()
-{
-	local FULL_TABLE=`get_next_pre_table`
-	while [ -n "$FULL_TABLE" ]; do
-		local TABLE=`echo $FULL_TABLE | awk '{ print $1; }'`
-		write_out "      Checking if table '$TABLE' must be partitioned"
-		local TABLE_ROWS=`echo $FULL_TABLE | awk '{ print $2; }'`
-		local ROW_SIZE=`echo $FULL_TABLE | awk '{ print $3; }'`
-		local TABLE_SIZE=$((TABLE_ROWS * ROW_SIZE))
-
-		#if no limit defined, just mount table list
-		if [ $LIMIT_TRANSACTION_LENGTH_SIZE -eq 0 ]; then
-			echo $TABLE >>$TABLE_LIST_FILE
-		else
-			#split tables
-			local RC=0
-			local LINE
-			if [ $TABLE_SIZE -gt $LIMIT_TRANSACTION_LENGTH_SIZE_BYTES ]; then
-				LIMIT_TRANSACTION_LENGTH_ROWS=$((LIMIT_TRANSACTION_LENGTH_SIZE_BYTES/ROW_SIZE))
-				#check if there is a forced limit
-				if [ -n "$MY_MIRROR_TXN_LEN_FORCE_LIMIT" ]; then
-					if [ $MY_MIRROR_TXN_LEN_FORCE_LIMIT -lt $LIMIT_TRANSACTION_LENGTH_ROWS ]; then
-						LIMIT_TRANSACTION_LENGTH_ROWS=$MY_MIRROR_TXN_LEN_FORCE_LIMIT
-					fi
-				fi
-				split_table "$TABLE" $TABLE_ROWS || { echo 1 >$CANCEL_FILE; break; }
-			else
-				echo "$TABLE" >>$TABLE_LIST_FILE
-			fi
-		fi
-		remove_line_from_file "#$FULL_TABLE" $TABLE_PRE_LIST_FILE
-		local FULL_TABLE=`get_next_pre_table`
-	done
-}
-
-function list_views()
-{
-	SCHEMA=$1
-	QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'VIEW'"
-	BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF || { rm $BUFF; return 1; }
-	cat $BUFF
-	rm $BUFF
-	return 0
-}
-
-function load_modules()
-{
-	local MOD_DIR=/usr/lib/my-mirror/modules
-
-	write_out "Loading modules"
-	if [ -n "$MY_MIRROR_MODULES_DIR" ]; then
-		MOD_DIR="$MY_MIRROR_MODULES_DIR"
-	fi
-
-	for F in "$MOD_DIR"/*; do
-		source "$F" || return 1
-	done
 }
 
 function mount_log_path()
@@ -226,6 +71,7 @@ function print_options()
 		write_out "Destination login path: $DST"
 	fi
 	write_out "Schema: $SCHEMA"
+	write_out "List file: $LIST_FILE"
 }
 
 function run()
@@ -250,11 +96,12 @@ function run()
 	done
 	shift $((OPTIND-1))
 
-	if [ $# -ne 1 ]; then
+	if [ $# -ne 2 ]; then
 		usage
 		return 1
 	fi
 	SCHEMA="$1"
+	LIST_FILE="$2"
 
 	validate_options $* || return 1
 
@@ -262,277 +109,18 @@ function run()
 	write_out "Log file: $TMP_LOG_FILE"
 	LOG_FILE="$TMP_LOG_FILE"
 	print_options || return 1
-	count_columns || return 1
 
-	write_out "Timestamp columns: $COL_COUNT"
+	CANCEL_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+	echo 0 >$CANCEL_FILE
 	do_validation
-	return 0
-}
-
-function run_local()
-{
-	SCHEMA=$1
-	if [ $# -eq 2 ]; then
-		L_TABLE=$2
-		COPY_CUSTOM_TABLES=1
-	fi
-
-	validate_options_local $* || return 1
-	#if ignore list file informed, it must exist
-	if [ -n "$IGNORE_LIST_FILE" -a ! -f "$IGNORE_LIST_FILE" ]; then
-		write_out "$IGNORE_LIST_FILE: file not found"
-		return 1
-	fi
-
-	if [ -n "$L_TABLE" ]; then
-		TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
-		copy_one_table_or_list "$L_TABLE"
-		local RC=$?
-		rm $TABLE_LIST_FILE
-		return $RC
-	fi
-	if [ $COPY_EVENTS -eq 1 ]; then
-		write_out "Copying events"
-		copy_events || return 1
-	fi
-	if [ $COPY_GRANTS -eq 1 ]; then
-		copy_grants || return 1
-	fi
-	if [ $COPY_ROUTINES -eq 1 ]; then
-		copy_routines || return 1
-	fi
-	if [ $COPY_TABLES -eq 1 ]; then
-		if [ $ONLY_TRIGGERS -eq 1 ]; then
-			copy_triggers || return 1
-		else
-			TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
-			copy_tables
-			local RC=$?
-			rm $TABLE_LIST_FILE
-			[ $RC -eq 0 ] || return 1
-		fi
-	fi
-	if [ $COPY_USERS -eq 1 ]; then
-		copy_all_users || return 1
-	fi
-	if [ $COPY_VIEWS -eq 1 ]; then
-		copy_views $SCHEMA || return 1
-	fi
-
-	write_out "Finished"
-}
-
-function copy_one_table()
-{
-	local L_DUMP_OPT
-	local L_EXIST
-	local RETRY_COUNT
-
-	local TABLE=$1
-	if [ -n "$IGNORE_LIST_FILE" -a -f "$IGNORE_LIST_FILE" ]; then
-		if grep -wi $L_TABLE "$IGNORE_LIST_FILE" >/dev/null; then
-			write_out "      Table '$TABLE' is ignored"
-			return 0
-		fi
-	fi
-	write_out "      Starting to copy table '$TABLE'"
-
-	if [ $CREATE_TABLES -eq 0 ]; then
-		L_EXIST=`table_exists $L_TABLE`
-		if [ $L_EXIST -eq 1 ]; then
-			L_DUMP_OPT="$L_DUMP_OPT --insert-ignore --no-create-info"
-		fi
-	fi
-	if [ $ONLY_TABLE_STRUCTURE -eq 1 ]; then
-		L_DUMP_OPT="$L_DUMP_OPT --no-data"
-	fi
-
-	RETRY_COUNT=0
-	EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	mysqldump --login-path=$SRC --hex-blob --set-gtid-purged=off $L_DUMP_OPT --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
-	EXP_SIZE=`stat -c %s $EXP_ERR_BUFF`
-	IMP_SIZE=`stat -c %s $IMP_ERR_BUFF`
-	while [ $EXP_SIZE -ne 0 -o $IMP_SIZE -ne 0 ]; do
-		write_file_out $EXP_ERR_BUFF
-		write_file_out $IMP_ERR_BUFF
-		local CANCEL=`cat $CANCEL_FILE`
-		if [ $CANCEL -eq 1 ]; then
-			break
-		fi
-		if [ $RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
-			TXT="      Table '$TABLE': error again"
-			write_out "$TXT"
-			echo 1 >$CANCEL_FILE
-			break
-		fi
-		EXP_MSG=`cat $EXP_ERR_BUFF`
-		IMP_MSG=`cat $IMP_ERR_BUFF`
-		ERR_MSG="\n   $IMP_MSG\n   $EXP_MSG"
-		((RETRY_COUNT++))
-		local TXT="      Table '$TABLE': error - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT/#$MAX_RETRY_COUNT)"
-		write_out "$TXT"
-		sleep $RETRY_INTERVAL
-
-		mysqldump --login-path=$SRC --set-gtid-purged=off $L_DUMP_OPT --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | sed -e "s/50017 DEFINER=\`.*\`@\`%\`/50017 DEFINER=\`$SCHEMA\`/" | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
-		EXP_SIZE=`stat -c %s $EXP_ERR_BUFF`
-		IMP_SIZE=`stat -c %s $IMP_ERR_BUFF`
-	done
-	rm $EXP_ERR_BUFF $IMP_ERR_BUFF
 	local CANCEL=`cat $CANCEL_FILE`
+	rm $CANCEL_FILE
 	if [ $CANCEL -eq 0 ]; then
-		write_out "      Finished copying table '$TABLE'"
+		write_out "Validation finished successfully"
+	else
+		write_out "Validation cancelled"
 	fi
 	return $CANCEL
-}
-
-function copy_one_table_or_list()
-{
-	local PARAM=$1
-
-	CUSTOM_TABLE_LIST_FILE=
-	if [[ $PARAM == @* ]]; then
-		local F="${PARAM:1}"
-		copy_table_custom_list $F || return 1
-	else
-		copy_one_table $PARAM || return 1
-	fi
-}
-
-function copy_one_table_interval()
-{
-	local LINE="$1"
-	local TABLE=`echo $LINE | cut -d : -f 1`
-
-	local BY_TS=0
-	local BY_PK=0
-	local BY_ROWNUM=0
-
-	local SPLIT_TYPE=`echo $LINE | cut -d : -f 2`
-	local COL_NAME=`echo $LINE | cut -d : -f 3`
-	local FIRST=`echo $LINE | cut -d : -f 4`
-	local LAST=`echo $LINE | cut -d : -f 5`
-
-	if [ "$SPLIT_TYPE" == "t" ]; then
-		BY_TS=1
-	fi
-	if [ "$SPLIT_TYPE" == "p" ]; then
-		BY_PK=1
-	fi
-	if [ "$SPLIT_TYPE" == "n" ]; then
-		BY_ROWNUM=1
-	fi
-
-	if [ $BY_TS -eq 1 ]; then
-		if [ -n "$FIRST" ]; then
-			 FIRST_EXT="`date -d @$FIRST +\"%Y-%m-%d %H:%M:%S\"`"
-			 LAST_EXT="`date -d @$LAST +\"%Y-%m-%d %H:%M:%S\"`"
-			 TABLE_WITH_INT="$TABLE ['$COL_NAME' $FIRST_EXT to $LAST_EXT]"
-			 WHERE="$COL_NAME between '$FIRST_EXT' and '$LAST_EXT'"
-		else
-			 TABLE_WITH_INT="$TABLE ['$COL_NAME' NULL]"
-			 WHERE="$COL_NAME is null"
-		fi
-	fi
-	if [ $BY_PK -eq 1 ]; then
-		local TABLE_WITH_INT="$TABLE ['$COL_NAME' $FIRST to $LAST]"
-		local WHERE="$COL_NAME between $FIRST and $LAST"
-	fi
-	if [ $BY_ROWNUM -eq 1 ]; then
-		local COUNT=$((LAST-FIRST+1))
-		local TABLE_WITH_INT="$TABLE [rows #$FIRST to #$LAST]"
-		local WHERE="true limit $FIRST, $COUNT"
-	fi
-	write_out "      Table '$TABLE_WITH_INT' starting"
-
-	local L_EXIST
-	local L_RETRY_COUNT
-
-	if [ -n "$IGNORE_LIST_FILE" -a -f "$IGNORE_LIST_FILE" ]; then
-		if grep -wi $TABLE "$IGNORE_LIST_FILE" >/dev/null; then
-			write_out "      Table '$TABLE' is ignored"
-			return 0
-		fi
-	fi
-
-	local EXP_OPT="--login-path=$SRC --insert-ignore --hex-blob --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers"
-	if [ $CREATE_TABLES -eq 0 ]; then
-		local EXP_OPT="$EXP_OPT --no-create-info"
-	fi
-	if [ $ONLY_TABLE_STRUCTURE -eq 1 ]; then
-		local EXP_OPT="$EXP_OPT --no-data"
-	fi
-
-	local RETRY_COUNT=1
-	local EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local IMP_OPT="--login-path=$DST"
-	mysqldump $EXP_OPT --where "$WHERE" $SCHEMA $TABLE 2>$EXP_ERR_BUFF | mysql $IMP_OPT $SCHEMA 2>$IMP_ERR_BUFF
-	write_file_out $EXP_ERR_BUFF
-	write_file_out $IMP_ERR_BUFF
-	local EXP_ERR_LEN=`stat -c %s $EXP_ERR_BUFF`
-	rm $EXP_ERR_BUFF
-	local IMP_ERR_LEN=`stat -c %s $IMP_ERR_BUFF`
-	rm $IMP_ERR_BUFF
-	local CANCEL=`cat $CANCEL_FILE`
-	while [ $EXP_ERR_LEN -ne 0 -o $IMP_ERR_LEN -ne 0 ]; do
-		[ $CANCEL -eq 0 ] || return 1
-		if [ $RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
-			local TXT="Table '$TABLE_WITH_INT': error again"
-			write_out "$TXT"
-			echo 1 >$CANCEL_FILE
-			return 1
-		fi
-		((RETRY_COUNT++))
-		local TXT="   Table '$TABLE_WITH_INT': error - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT/#$MAX_RETRY_COUNT)"
-		write_out "$TXT"
-		sleep $RETRY_INTERVAL
-		local EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		local IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		mysqldump $EXP_OPT --where "$WHERE" $SCHEMA $TABLE 2>$EXP_ERR_BUFF | mysql $IMP_OPT $SCHEMA 2>$IMP_ERR_BUFF
-		write_file_out $EXP_ERR_BUFF
-		write_file_out $IMP_ERR_BUFF
-		local EXP_ERR_LEN=`stat -c %s $EXP_ERR_BUFF`
-		rm $EXP_ERR_BUFF
-		local IMP_ERR_LEN=`stat -c %s $IMP_ERR_BUFF`
-		rm $IMP_ERR_BUFF
-		local CANCEL=`cat $CANCEL_FILE`
-	done
-	write_out "      Table '$TABLE_WITH_INT' finished"
-	return 0
-}
-
-function copy_one_virtual_column()
-{
-	local BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local QUERY="show create table $TABLE_SCHEMA.$TABLE"
-	mysql --login-path=$SRC -N -e "$QUERY" | sed -e 's/\\n/\n/g' | grep -m 1 -w $COLUMN_NAME | sed -e 's/,$//' | sed -e 's/\\/\\\\/g' >$BUFF || return 1
-	local NEW_COL=`cat $BUFF`
-	mysql --login-path=$SRC -N -e "$QUERY" | sed -e 's/\\n/\n/g' | grep -m 1 -B 1 -w $COLUMN_NAME | head -n 1 | awk -F \  '{ print $1; }' >$BUFF || return 1
-	local PREV_COL=`cat $BUFF`
-	rm $BUFF
-	local QUERY="alter table $TABLE_SCHEMA.$TABLE add $NEW_COL after $PREV_COL"
-	mysql --login-path=$DST -e "$QUERY" || return 1
-}
-
-function copy_table_custom_list()
-{
-	local F="$1"
-		
-	CUSTOM_TABLE_LIST_FILE="$F"
-	if ! [ -f "$F" ]; then
-		write_out "File not found: $F"
-		return 1
-	fi
-	copy_tables || return 1
-}
-
-function read_config()
-{
-	WORK_DIR=`crudini --get $CONFIG_FILE main work_dir 2>/dev/null`
-	if [ -z "$WORK_DIR" ]; then
-		WORK_DIR=/var/lib/my-admin-tools/my-mirror
-	fi
 }
 
 function remove_line_from_file()
@@ -545,289 +133,40 @@ function remove_line_from_file()
 	} 3<$LOCK_FILE
 }
 
-function split_table()
+function get_primary_key()
 {
 	local TABLE="$1"
-	local ROWS=$2
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local DESC=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_FILE="$2"
 
-	write_out "      Describing table '$TABLE'"
-	local QUERY="desc $TABLE"
-	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$DESC 2>$ERR_BUFF
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local QUERY="select column_name from information_schema.columns where table_schema = '$SCHEMA' and table_name = $TABLE and column_key = 'PRI' and ordinal_position = 1"
+	mysql --login-path=$SRC -N -e "$QUERY" >"$OUT_FILE" 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $DESC; return 1; }
-
-	write_out "      Checking if table '$TABLE' has an indexed timestamp column"
-	local COL_NAME=`grep -Ewi -m 1 '(date|datetime|timestamp).*mul' $DESC | awk '{print $1;}'`
-	if [ -n "$COL_NAME" ]; then
-		rm $DESC
-		write_out "      Found an indexed timestamp column in table '$TABLE': $COL_NAME"
-		split_table_ts "$TABLE" "$COL_NAME" || return 1
-		write_out "      Partitioning for table $TABLE finished"
-		return 0
-	fi
-
-	write_out "      Checking if table '$TABLE' has a numeric single-column PK"
-	local PK_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	grep -w PRI $DESC >$PK_BUFF
-	rm $DESC
-
-	#if PK is a single column
-	local COUNT_COLS=`cat $PK_BUFF | wc -l`
-	if [ $COUNT_COLS -eq 1 ]; then
-		local COL_NAME=`cat $PK_BUFF | awk '{print $1}'`
-		local TYPE=`cat $PK_BUFF | awk '{print $2}'`
-		local SIMPLE_TYPE=`echo $TYPE | sed -e 's/(.*)//'`
-		if [ "$SIMPLE_TYPE" == "decimal" -o "$SIMPLE_TYPE" == "int" -o "$SIMPLE_TYPE" == "bigint" ]; then
-			#PK can be used
-			rm $PK_BUFF
-			write_out "      Found a numeric single-column PK in table '$TABLE': $COL_NAME"
-			split_table_pk "$TABLE" "$COL_NAME" || return 1
-			write_out "      Partitioning for table '$TABLE' finished"
-			return 0
-		fi
-	fi
-	rm $PK_BUFF
-	split_table_rownum "$TABLE" $ROWS || return 1
-	write_out "      Partitioning for table '$TABLE' finished"
-}
-
-function split_table_pk()
-{
-	local TABLE_NAME="$1"
-	local COL_NAME="$2"
-
-	write_out "      Partitioning table '$TABLE_NAME' by PK ($COL_NAME) ($LIMIT_TRANSACTION_LENGTH_ROWS rows per partition)"
-
-	#get min
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local QUERY="select min($COL_NAME) from $TABLE_NAME"
-	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
-	local RC=$?
-	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
-	local MIN_VAL=`cat $OUT_BUFF`
-	local PART_MIN_VAL=`cat $OUT_BUFF`
-	rm $OUT_BUFF
-
-	#get max
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local QUERY="select max($COL_NAME) from $TABLE_NAME"
-	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
-	local RC=$?
-	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
-	local MAX_VAL=`cat $OUT_BUFF`
-	rm $OUT_BUFF
-
-	local CANCEL=`cat $CANCEL_FILE`
-	while [ $CANCEL -eq 0 ]; do
-		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		PERCENT=`echo "scale=0; ($PART_MIN_VAL - $MIN_VAL) * 100 / ($MAX_VAL - $MIN_VAL + 1)" | bc`
-		write_out "      Table '$TABLE_NAME': reading partition: >>$PART_MIN_VAL ($PERCENT%)"
-		local QUERY="select max($COL_NAME) from (select $COL_NAME from $TABLE_NAME where $COL_NAME between $PART_MIN_VAL and $MAX_VAL order by 1 limit $LIMIT_TRANSACTION_LENGTH_ROWS) x"
-
-		local RETRY_COUNT=1
-		mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
-		local RC=$?
-		write_file_out $ERR_BUFF
-		rm $ERR_BUFF
-		while [ $RC -ne 0 ]; do
-			rm $OUT_BUFF
-			if [ $RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
-				write_out "      Error reading partition in table '$TABLE_NAME' - Max retries reached"
-				return 1
-			fi
-			((RETRY_COUNT++))
-			write_out "      Error reading partition in table '$TABLE_NAME' - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT/#$MAX_RETRY_COUNT)"
-			sleep $RETRY_INTERVAL
-			mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
-			local RC=$?
-			write_file_out $ERR_BUFF
-			rm $ERR_BUFF
-		done
-		local PART_MAX_VAL=`cat $OUT_BUFF`
-		rm $OUT_BUFF
-		if [ -z "$PART_MAX_VAL" -o "$PART_MAX_VAL" == "NULL" ]; then
-			write_out "      Partitioning finished for table '$TABLE_NAME'"
-			break
-		fi
-		local LINE="$TABLE_NAME:p:$COL_NAME:$PART_MIN_VAL:$PART_MAX_VAL"
-		echo "$LINE" >>$TABLE_LIST_FILE
-		local PART_MIN_VAL=`echo $PART_MAX_VAL + 1 | bc`
-		local CANCEL=`cat $CANCEL_FILE`
-	done
-}
-
-function split_table_ts()
-{
-	local TABLE_NAME="$1"
-	local COL_NAME="$2"
-
-	write_out "      Partitioning table '$TABLE_NAME' by timestamp ($COL_NAME)"
-	#get min
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local QUERY="select date_format(min($COL_NAME), '%Y-%m-%d %H:%i:%S') from $TABLE_NAME"
-	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
-	local RC=$?
-	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
-	local BATCH_MIN_VAL="`cat $OUT_BUFF`"
-	rm $OUT_BUFF
-
-	#get max
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local QUERY="select date_format(max($COL_NAME), '%Y-%m-%d %H:%i:%S') from $TABLE_NAME"
-	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
-	local RC=$?
-	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
-	local TABLE_MAX_VAL="`cat $OUT_BUFF`"
-	local TABLE_MAX_VAL_UNIX=`date -d "$TABLE_MAX_VAL" +%s`
-	rm $OUT_BUFF
-
-	local WEEKS=0
-	local LAST_BATCH=0
-
-	local CANCEL=`cat $CANCEL_FILE`
-	while [ $LAST_BATCH -eq 0 -a $CANCEL -eq 0 ]; do
-		local BATCH_MIN_VAL_UNIX=`date -d "$BATCH_MIN_VAL" +%s`
-		#add number of days
-		local BATCH_MAX_VAL_UNIX=$((BATCH_MIN_VAL_UNIX+LIMIT_TRANSACTION_LENGTH_SECS-1))
-		if [ $BATCH_MAX_VAL_UNIX -gt $TABLE_MAX_VAL_UNIX ]; then
-			BATCH_MAX_VAL_UNIX=$TABLE_MAX_VAL_UNIX
-			LAST_BATCH=1
-		fi
-
-		local LINE="$TABLE_NAME:t:$COL_NAME:$BATCH_MIN_VAL_UNIX:$BATCH_MAX_VAL_UNIX"
-		echo "$LINE" >>$TABLE_LIST_FILE
-
-		local AUX=$((BATCH_MAX_VAL_UNIX+1))
-		BATCH_MIN_VAL="`date -d @$AUX +\"%Y-%m-%d %H:%M:%S\"`"
-		CANCEL=`cat $CANCEL_FILE`
-	done
-	#rows with NULL
-	local LINE="$TABLE_NAME:t:$COL_NAME::"
-	echo "$LINE" >>$TABLE_LIST_FILE
-}
-
-function split_table_rownum()
-{
-	local TABLE_NAME="$1"
-	local ROWS="$2"
-
-	write_out "      Partitioning table '$TABLE_NAME' by row number ($LIMIT_TRANSACTION_LENGTH_ROWS rows per partition)"
-	local FIRST=1
-	while [ $FIRST -le $ROWS ]; do
-		local LAST=$((FIRST+LIMIT_TRANSACTION_LENGTH_ROWS-1))
-		echo "$TABLE:n::$FIRST:$LAST" >>$TABLE_LIST_FILE
-		local FIRST=$((LAST+1))
-	done
-	local LAST=99999999999
-	echo "$TABLE:n::$FIRST:$LAST" >>$TABLE_LIST_FILE
-}
-
-function table_exists()
-{
-	local L_COUNT
-	local L_QUERY
-	local L_TABLE
-
-	L_TABLE=$1
-	L_QUERY="select count(1) from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' and table_name = '$L_TABLE'"
-	L_COUNT=`mysql --login-path=$DST -N -e "$L_QUERY" $SCHEMA`
-	echo $L_COUNT
-}
-
-function th_copy_table_data()
-{
-	local FIRST=1
-	local L_TABLE=`get_next_table`
-	local CANCEL=`cat $CANCEL_FILE`
-	while [ -n "$L_TABLE" -a $CANCEL -eq 0 ]; do
-		#for the first table, sleep between 101ms and 1s, to avoid deadlock
-		if [ $FIRST -eq 1 ]; then
-			FIRST=0
-			local MSEC=$((RANDOM%900+101))
-			local SEC=`echo scale=3\;$MSEC/1000 | bc`
-			sleep $SEC
-		fi
-		local INTERVAL=`echo $L_TABLE | cut -d : -f 2`
-		if [ "$INTERVAL" != "$L_TABLE" ]; then
-			if ! copy_one_table_interval $L_TABLE; then
-				echo 1 >$CANCEL_FILE
-				break
-			fi
-		else
-			if ! copy_one_table $L_TABLE; then
-				echo 1 >$CANCEL_FILE
-				break
-			fi
-		fi
-		#remove table from list
-		remove_line_from_file "#$L_TABLE" $TABLE_LIST_FILE
-		L_TABLE=`get_next_table`
-		local CANCEL=`cat $CANCEL_FILE`
-	done
+	[ $RC -eq 0 ] || return 1
 }
 
 function usage()
 {
 	echo "Usage:" 
-	echo "$0 [ -d <path> ] -s <path> <schema>"
+	echo "$0 [ -d <path> ] -s <path> <schema> <file>"
 	echo "   -d: For destination, use <path> with destination configuration (hostname, port, username, password)."
 	echo "       Default: 'client'."
 	echo "   -s: Use login path <path> as source instance"
 	echo "   schema: Schema to be validated"
+	echo "   file: table list file"
+	echo "      a file with one table per line"
+	echo "      format: <table>:<column>"
+	echo "         column: must be a timestamp column, filled with the moment of each row creation"
 }
 
 function validate_options()
 {
 	[ -n "$SRC" ] || { echo "Option 's' is required"; usage; return 1; }
-}
-
-function validate_options_aws()
-{
-	#options -F and -a can't e used together
-	if [ $COPY_ALL -eq 1 -a $FINISH_MODE -eq 1 ]; then
-		echo "Options 'a' and 'F' cannot be used together"
-		usage
-		return 1
-	fi
-}
-
-function validate_options_local()
-{
-	[ -n "$SRC" ] || { echo "Option 's' is required"; usage; return 1; }
-	[ -n "$DST" ] || { echo "Option 'd' is required"; usage; return 1; }
-
-	#if triggers requested, but tables not requested
-	if [ $ONLY_TRIGGERS -eq 1 -a $COPY_TABLES -eq 0 ]; then
-		echo "Triggers requested, but tables not requested"
-		return 1
-	fi
-
-	#if no object type
-	if [ $COPY_CUSTOM_TABLES -eq 0 -a $COPY_TABLES -eq 0 -a $COPY_EVENTS -eq 0 -a $COPY_GRANTS -eq 0 -a $COPY_ROUTINES -eq 0 -a $COPY_USERS -eq 0 -a $COPY_VIEWS -eq 0 ]; then
-		echo "No item was requested. Use at least one of the following options: -E, -G, -R, -T, -U, -V. Or either inform a table/table list."
-		return 1
-	fi
-
-	if [ $# -lt 1 -o $# -gt 2 ]; then
-		usage
+#list file must exists
+	if ! [ -f "$LIST_FILE" ]; then
+		echo "Cannot find file '$LIST_FILE'" >&2
 		return 1
 	fi
 }
@@ -868,15 +207,54 @@ function handle_term()
 	CANCEL=1
 }
 
-function users_role_exists()
+function validate_th()
 {
-	OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local ROLE=$1
-	local QUERY="select count(1) from mysql.user where user = '$ROLE' and authentication_string = ''"
-	mysql --login-path=$DST -N -e "$QUERY" >$OUT_BUFF || { rm $OUT_BUFF; return 1; }
-	local COUNT=`cat $OUT_BUFF`
-	rm $OUT_BUFF
-	echo $COUNT
+	local TABLE="$1"
+	local COLUMN="$2"
+
+	local PK_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+	get_primary_key \"$TABLE\" $PK_FILE || { write_out "Can't find PK for table '$TABLE'"; rm $PK_FILE; echo 1 >$CANCEL_FILE; return; }
+	local PK=`cat $PK_FILE`
+	rm $PK_FILE
+	[ -n "$PK" ] || { write_out "Can't find PK for table '$TABLE'"; echo 1 >$CANCEL_FILE; return; }
+
+	local SRC_DATA="$DATA_DIR/$TABLE.src.log"
+	local DST_DATA="$DATA_DIR/$TABLE.dst.log"
+
+	local QUERY
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local START_ROW=1
+
+	local CANCEL=`cat $CANCEL_FILE`
+	while [ $CANCEL -eq 0 ]; do
+		QUERY="select * from \`$TABLE\` where \`$COLUMN\` < '$MAX_TIME' order by \`$PK\` limit $START_ROW, $BLOCK_LENGTH"
+
+		write_out "Comparing table '$TABLE' [rows $START_ROW >> +$BLOCK_LENGTH]"
+		mysql --login-path=$SRC -e "$QUERY" $SCHEMA >"$SRC_DATA" 2>$ERR_BUFF
+		local RC=$?
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || { write_out "Error reading table '$TABLE' from source instance"; echo 1 >$CANCEL_FILE; break; }
+
+		local RSET_COUNT=`cat "$SRC_DATA" | wc -l`
+		[ $RSET_COUNT -gt 0 ] || break
+
+		mysql --login-path=$DST -e "$QUERY" $SCHEMA >$DST_DATA 2>$ERR_BUFF
+		local RC=$?
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || { write_out "Error reading table '$TABLE' from destination instance"; echo 1 >$CANCEL_FILE; break; }
+
+		local SRC_MD5=`md5sum "$SRC_DATA" | awk '{print $1;}'`
+		local DST_MD5=`md5sum "$DST_DATA" | awk '{print $1;}'`
+		CANCEL=`cat $CANCEL_FILE`
+		if [ $CANCEL -eq 0 -a "$SRC_MD5" != "$DST_MD5" ]; then
+			write_out "*** FOUND A DIFFERENCE: table '$TABLE' - $DATA_DIR"
+			echo 1 >$CANCEL_FILE
+			break
+		fi
+		START_ROW=$((START_ROW+BLOCK_LENGTH))
+	done
 }
 
 trap "handle_int" INT
