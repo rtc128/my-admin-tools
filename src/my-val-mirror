@@ -1,10 +1,10 @@
 #!/bin/bash
 
-BLOCK_LENGTH=20000
+BLOCK_LENGTH=50000
 SECONDS_BEHIND=15
 MAX_RETRY_COUNT=3
 RETRY_INTERVAL=10
-COMPARE_INTERVAL_DAYS=20
+COMPARE_DAYS_BEHIND=180
 
 if [ "$DEBUG" == "1" ]; then
    set -x
@@ -36,6 +36,8 @@ function count_columns()
 function do_validation()
 {
 	local UNIX_NOW=`date +%s`
+	local UNIX_MIN_TIME=$((UNIX_NOW-$COMPARE_DAYS_BEHIND))
+	MIN_TIME="`date -d @$UNIX_MIN_TIME +\"%Y-%m-%d %H:%M:%S\"`"
 	local UNIX_MAX_TIME=$((UNIX_NOW-$SECONDS_BEHIND))
 	MAX_TIME="`date -d @$UNIX_MAX_TIME +\"%Y-%m-%d %H:%M:%S\"`"
 
@@ -227,7 +229,7 @@ function validate_th()
 
 	local CANCEL=`cat $CANCEL_FILE`
 	while [ $CANCEL -eq 0 ]; do
-		QUERY="select * from \`$TABLE\` where \`$COLUMN\` < '$MAX_TIME' order by \`$PK\` limit $START_ROW, $BLOCK_LENGTH"
+		QUERY="select * from \`$TABLE\` where \`$COLUMN\` between '$MIN_TIME' and '$MAX_TIME' order by \`$PK\` limit $START_ROW, $BLOCK_LENGTH"
 
 		write_out "Comparing table '$TABLE' [rows $START_ROW >> +$BLOCK_LENGTH]"
 		mysql --login-path=$SRC -e "$QUERY" $SCHEMA >"$SRC_DATA" 2>$ERR_BUFF
