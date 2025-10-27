@@ -851,6 +851,13 @@ function run()
 	mkdir -p "$DST_WORK_DIR" || return 1
 	LOCK_FILE="$DST_WORK_DIR/.lock"
 
+	if [ -n "$MY_ADMIN_TOOLS_MAX_RETRY_COUNT" ]; then
+		MAX_RETRY_COUNT=$MY_ADMIN_TOOLS_MAX_RETRY_COUNT
+	fi
+	if [ -n "$MY_ADMIN_TOOLS_RETRY_INTERVAL" ]; then
+		RETRY_INTERVAL=$MY_ADMIN_TOOLS_RETRY_INTERVAL
+	fi
+
 	local TMP_LOG_FILE=`mount_log_path` || return 1
 	write_out "Log file: $TMP_LOG_FILE"
 	LOG_FILE="$TMP_LOG_FILE"
@@ -1429,6 +1436,11 @@ function usage()
 	echo "      Default: copy all schemas"
 	echo "   table: If set, only this table is copied"
 	echo "   table list file: If set, only tables listed in this file are copied"
+	echo "Environment:"
+	echo "   The following variables can be se in environment before running my-mirror:"
+	echo "      MY_ADMIN_TOOLS_MAX_RETRY_COUNT: max number of tries when an access ta a database is failing"
+	echo "      MY_ADMIN_TOOLS_RETRY_INTERVAL: interval (seconds) between each try when there are failures accessing databases"
+	echo "      MY_MIRROR_TXN_LEN_FORCE_LIMIT: for tables partitioned by PK, each partition will have no more than <MY_MIRROR_TXN_LEN_FORCE_LIMIT> rows, even if average row length is very small."
 }
 
 function validate_options()
