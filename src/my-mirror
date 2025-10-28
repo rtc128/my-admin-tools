@@ -937,7 +937,7 @@ function run_local()
 
 function copy_one_table()
 {
-	local L_DUMP_OPT
+	local L_DUMP_OPT="--skip-disable-keys"
 	local L_EXIST
 	local RETRY_COUNT
 
@@ -1068,7 +1068,7 @@ function copy_one_table_interval()
 		fi
 	fi
 
-	local EXP_OPT="--login-path=$SRC --insert-ignore --hex-blob --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers"
+	local EXP_OPT="--login-path=$SRC --insert-ignore --hex-blob --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers --skip-disable-keys"
 	if [ $CREATE_TABLES -eq 0 ]; then
 		local EXP_OPT="$EXP_OPT --no-create-info"
 	fi
