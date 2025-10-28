@@ -1,10 +1,10 @@
 #!/bin/bash
 
-BLOCK_LENGTH=50000
-SECONDS_BEHIND=15
+BLOCK_LENGTH=20000
+START_DAYS_BEHIND=180
+END_SECONDS_BEHIND=10
 MAX_RETRY_COUNT=3
 RETRY_INTERVAL=10
-COMPARE_DAYS_BEHIND=180
 
 if [ "$DEBUG" == "1" ]; then
    set -x
@@ -36,9 +36,10 @@ function count_columns()
 function do_validation()
 {
 	local UNIX_NOW=`date +%s`
-	local UNIX_MIN_TIME=$((UNIX_NOW-$COMPARE_DAYS_BEHIND))
+	local START_SECONDS_BEHIND=$((START_DAYS_BEHIND*24*60*60))
+	local UNIX_MIN_TIME=$((UNIX_NOW-START_SECONDS_BEHIND))
 	MIN_TIME="`date -d @$UNIX_MIN_TIME +\"%Y-%m-%d %H:%M:%S\"`"
-	local UNIX_MAX_TIME=$((UNIX_NOW-$SECONDS_BEHIND))
+	local UNIX_MAX_TIME=$((UNIX_NOW-END_SECONDS_BEHIND))
 	MAX_TIME="`date -d @$UNIX_MAX_TIME +\"%Y-%m-%d %H:%M:%S\"`"
 
 	DATA_DIR="/tmp/my-val-mirror"
@@ -224,28 +225,19 @@ function validate_th()
 	local DST_DATA="$DATA_DIR/$TABLE.dst.log"
 
 	local QUERY
-	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
 	local START_ROW=1
 
 	local CANCEL=`cat $CANCEL_FILE`
 	while [ $CANCEL -eq 0 ]; do
-		QUERY="select * from \`$TABLE\` where \`$COLUMN\` between '$MIN_TIME' and '$MAX_TIME' order by \`$PK\` limit $START_ROW, $BLOCK_LENGTH"
-
 		write_out "Comparing table '$TABLE' [rows $START_ROW >> +$BLOCK_LENGTH]"
-		mysql --login-path=$SRC -e "$QUERY" $SCHEMA >"$SRC_DATA" 2>$ERR_BUFF
-		local RC=$?
-		write_file_out $ERR_BUFF
-		rm $ERR_BUFF
-		[ $RC -eq 0 ] || { write_out "Error reading table '$TABLE' from source instance"; echo 1 >$CANCEL_FILE; break; }
+		QUERY="select * from \`$TABLE\` where \`$COLUMN\` between '$MIN_TIME' and '$MAX_TIME' order by \`$COLUMN\`, \`$PK\` limit $START_ROW, $BLOCK_LENGTH"
+		exec_query_th $SRC "$QUERY" "$SRC_DATA" &
+		exec_query_th $DST "$QUERY" "$DST_DATA" &
+		wait
+		[ $CANCEL -eq 0 ] || break
 
 		local RSET_COUNT=`cat "$SRC_DATA" | wc -l`
 		[ $RSET_COUNT -gt 0 ] || break
-
-		mysql --login-path=$DST -e "$QUERY" $SCHEMA >$DST_DATA 2>$ERR_BUFF
-		local RC=$?
-		write_file_out $ERR_BUFF
-		rm $ERR_BUFF
-		[ $RC -eq 0 ] || { write_out "Error reading table '$TABLE' from destination instance"; echo 1 >$CANCEL_FILE; break; }
 
 		local SRC_MD5=`md5sum "$SRC_DATA" | awk '{print $1;}'`
 		local DST_MD5=`md5sum "$DST_DATA" | awk '{print $1;}'`
@@ -257,6 +249,20 @@ function validate_th()
 		fi
 		START_ROW=$((START_ROW+BLOCK_LENGTH))
 	done
+}
+
+function exec_query_th()
+{
+	local LOGIN_PATH=$1
+	local QUERY="$2"
+	local DATA_FILE="$3"
+
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -e "$QUERY" $SCHEMA >"$DATA_FILE" 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { write_out "Error reading table '$TABLE' - login path: $LOGIN_PATH"; echo 1 >$CANCEL_FILE; }
 }
 
 trap "handle_int" INT
