@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.4.7
+Version:			 1.4.8
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -80,7 +80,7 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 
 %changelog
 
-* Thu Feb 12 2025 Rodrigo Tassinari 1.4.7
+* Thu Feb 12 2026 Rodrigo Tassinari 1.4.8
 - my-mirror: New procedure for better partitioning performance
 
 * Tue Oct 28 2025 Rodrigo Tassinari 1.4.6
