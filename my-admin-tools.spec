@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.4.6
+Version:			 1.4.7
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -79,6 +79,9 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Thu Feb 12 2025 Rodrigo Tassinari 1.4.7
+- my-mirror: New procedure for better partitioning performance
 
 * Tue Oct 28 2025 Rodrigo Tassinari 1.4.6
 - my-mirror: When copying tables, do not disable keys in destination, to reduce locks
