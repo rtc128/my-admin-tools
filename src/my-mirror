@@ -1,8 +1,8 @@
 #!/bin/bash
 
-MAX_ALLOWED_PACKET_MB=4
-MAX_RETRY_COUNT=10
-RETRY_INTERVAL=15
+MAX_ALLOWED_PACKET_MB=1
+MAX_RETRY_COUNT=5
+RETRY_INTERVAL=10
 
 if [ "$DEBUG" == "1" ]; then
    set -x
@@ -634,7 +634,7 @@ function list_tables()
 	rm $ERR_BUFF
 	[ $SIZE -eq 0 ] || { rm $TABLE_PRE_LIST_FILE; return 1; }
 
-	if [ $LIMIT_TRANSACTION_LENGTH_SIZE -eq 0 ]; then
+	if [ $LIMIT_PARTITION_SIZE -eq 0 ]; then
 		awk '{print $1;}' $TABLE_PRE_LIST_FILE >$TABLE_LIST_FILE || { rm $TABLE_PRE_LIST_FILE; return 1; }
 		local RC=$?
 		rm $TABLE_PRE_LIST_FILE
@@ -665,18 +665,18 @@ function list_tables_th()
 		local TABLE_SIZE=$((TABLE_ROWS * ROW_SIZE))
 
 		#if no limit defined, just mount table list
-		if [ $LIMIT_TRANSACTION_LENGTH_SIZE -eq 0 ]; then
+		if [ $LIMIT_PARTITION_SIZE -eq 0 ]; then
 			echo $TABLE >>$TABLE_LIST_FILE
 		else
 			#split tables
 			local RC=0
 			local LINE
-			if [ $TABLE_SIZE -gt $LIMIT_TRANSACTION_LENGTH_SIZE_BYTES ]; then
-				LIMIT_TRANSACTION_LENGTH_ROWS=$((LIMIT_TRANSACTION_LENGTH_SIZE_BYTES/ROW_SIZE))
+			if [ $TABLE_SIZE -gt $LIMIT_PARTITION_SIZE_BYTES ]; then
+				LIMIT_PARTITION_SIZE_ROWS=$((LIMIT_PARTITION_SIZE_BYTES/ROW_SIZE))
 				#check if there is a forced limit
 				if [ -n "$MY_MIRROR_TXN_LEN_FORCE_LIMIT" ]; then
-					if [ $MY_MIRROR_TXN_LEN_FORCE_LIMIT -lt $LIMIT_TRANSACTION_LENGTH_ROWS ]; then
-						LIMIT_TRANSACTION_LENGTH_ROWS=$MY_MIRROR_TXN_LEN_FORCE_LIMIT
+					if [ $MY_MIRROR_TXN_LEN_FORCE_LIMIT -lt $LIMIT_PARTITION_SIZE_ROWS ]; then
+						LIMIT_PARTITION_SIZE_ROWS=$MY_MIRROR_TXN_LEN_FORCE_LIMIT
 					fi
 				fi
 				split_table "$TABLE" $TABLE_ROWS || { echo 1 >$CANCEL_FILE; break; }
@@ -754,11 +754,11 @@ function print_options()
 	if [ $ONLY_TABLE_STRUCTURE -eq 1 ]; then
 		write_out "Only table structure: enabled"
 	fi
-	if (( $(echo "$LIMIT_TRANSACTION_LENGTH_DAYS > 0" | bc -l ) )); then
-		write_out "Partition length (days): $LIMIT_TRANSACTION_LENGTH_DAYS"
+	if [ $LIMIT_PARTITION_SIZE -gt 0 ]; then
+		write_out "Partition size: ${LIMIT_PARTITION_SIZE}G"
 	fi
-	if [ $LIMIT_TRANSACTION_LENGTH_SIZE -gt 0 ]; then
-		write_out "Partition length (size): ${LIMIT_TRANSACTION_LENGTH_SIZE}G"
+	if [ -n "$PART_LOCAL_DIR" ]; then
+		write_out "Local partitiong buffer directory: ${PART_LOCAL_DIR}"
 	fi
 	if [ $RESUME -eq 1 ]; then
 		write_out "Resume data copy mode: ON"
@@ -779,9 +779,7 @@ function run()
 	COPY_USERS=0
 	DST=client
 	FINISH_MODE=0
-	LIMIT_TRANSACTION_LENGTH=
-	LIMIT_TRANSACTION_LENGTH_SIZE=0
-	LIMIT_TRANSACTION_LENGTH_DAYS=0
+	LIMIT_PARTITION_SIZE=0
 	ONLY_TRIGGERS=0
 	ONLY_TABLE_STRUCTURE=0
 	COPY_VIEWS=0
@@ -789,15 +787,18 @@ function run()
 	TH_COUNT=1
 	COPY_ALL=0
 	AWS_SKIP_TO_DATA=0
+	PART_LOCAL_DIR=
 
 	local opt
 
-	while getopts "ADEFGRSTVad:i:kl:n:rs:tU" opt; do
+	while getopts "ADEFGRSTVab:d:hi:kl:n:rs:tU" opt; do
 		case $opt in
 			A)
 				AWS=1;;
 			a)
 				COPY_ALL=1;;
+			b)
+				PART_LOCAL_DIR="$OPTARG";;
 			D)
 				AWS_SKIP_TO_DATA=1;;
 			E)
@@ -818,12 +819,15 @@ function run()
 				DST=$OPTARG;;
 			f)
 				FINISH_MODE=1;;
+			h)
+				usage
+				return 0;;
 			i)
 				IGNORE_LIST_FILE=$OPTARG;;
 			k)
 				CREATE_TABLES=0;;
 			l)
-				LIMIT_TRANSACTION_LENGTH=$OPTARG
+				LIMIT_PARTITION_SIZE=$OPTARG
 				CREATE_TABLES=0;;
 			n)
 				TH_COUNT=$OPTARG;;
@@ -866,7 +870,7 @@ function run()
 	CANCEL_FILE=`mktemp /tmp/my-mirror.XXXXXX`
 	echo 0 >$CANCEL_FILE || return 1
 
-	LIMIT_TRANSACTION_LENGTH_SIZE_BYTES=$((LIMIT_TRANSACTION_LENGTH_SIZE * 1024 * 1024 * 1024))
+	LIMIT_PARTITION_SIZE_BYTES=$((LIMIT_PARTITION_SIZE * 1024 * 1024 * 1024))
 	if [ $AWS -eq 1 ]; then
 		copy_aws $*
 	else
@@ -1178,16 +1182,6 @@ function split_table()
 	rm $ERR_BUFF
 	[ $RC -eq 0 ] || { rm $DESC; return 1; }
 
-	write_out "      Checking if table '$TABLE' has an indexed timestamp column"
-	local COL_NAME=`grep -Ewi -m 1 '(date|datetime|timestamp).*mul' $DESC | awk '{print $1;}'`
-	if [ -n "$COL_NAME" ]; then
-		rm $DESC
-		write_out "      Found an indexed timestamp column in table '$TABLE': $COL_NAME"
-		split_table_ts "$TABLE" "$COL_NAME" || return 1
-		write_out "      Partitioning for table $TABLE finished"
-		return 0
-	fi
-
 	write_out "      Checking if table '$TABLE' has a numeric single-column PK"
 	local PK_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	grep -w PRI $DESC >$PK_BUFF
@@ -1200,17 +1194,13 @@ function split_table()
 		local TYPE=`cat $PK_BUFF | awk '{print $2}'`
 		local SIMPLE_TYPE=`echo $TYPE | sed -e 's/(.*)//'`
 		if [ "$SIMPLE_TYPE" == "decimal" -o "$SIMPLE_TYPE" == "int" -o "$SIMPLE_TYPE" == "bigint" ]; then
-			#PK can be used
-			rm $PK_BUFF
 			write_out "      Found a numeric single-column PK in table '$TABLE': $COL_NAME"
 			split_table_pk "$TABLE" "$COL_NAME" || return 1
-			write_out "      Partitioning for table '$TABLE' finished"
-			return 0
 		fi
+	else
+		split_table_rownum "$TABLE" $ROWS || return 1
 	fi
 	rm $PK_BUFF
-	split_table_rownum "$TABLE" $ROWS || return 1
-	write_out "      Partitioning for table '$TABLE' finished"
 }
 
 function split_table_pk()
@@ -1218,7 +1208,79 @@ function split_table_pk()
 	local TABLE_NAME="$1"
 	local COL_NAME="$2"
 
-	write_out "      Partitioning table '$TABLE_NAME' by PK ($COL_NAME) ($LIMIT_TRANSACTION_LENGTH_ROWS rows per partition)"
+	write_out "      Partitioning table '$TABLE_NAME' by PK ($COL_NAME) ($LIMIT_PARTITION_SIZE_ROWS rows per partition)"
+	if [ -z "$PART_LOCAL_DIR" ]; then
+		split_table_pk_remote "$TABLE_NAME" "$COL_NAME" || return 1
+	else
+		split_table_pk_local "$TABLE_NAME" "$COL_NAME" || return 1
+	fi
+	write_out "      Partitioning finished for table '$TABLE_NAME'"
+}
+
+function split_table_pk_local()
+{
+	local TABLE_NAME="$1"
+	local COL_NAME="$2"
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local PK_BUFF="$PART_LOCAL_DIR/$TABLE_NAME"
+	local PK
+	local PART_MIN_VAL
+
+	write_out "         Listing all PK values in table '$TABLE_NAME'"
+	local RETRY_COUNT=1
+	local QUERY="select $COL_NAME from $TABLE_NAME order by 1"
+	mysql --login-path=$SRC -q -N -e "$QUERY" $SCHEMA >"$PK_BUFF" 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	while [ $RC -ne 0 ]; do
+		rm "$PK_BUFF"
+		if [ $RETRY_COUNT -eq $MAX_RETRY_COUNT ]; then
+			write_out "         Error listing PKs in table '$TABLE_NAME' - Max retries reached"
+			return 1
+		fi
+		((RETRY_COUNT++))
+		write_out "         Error listing PKs in table '$TABLE_NAME' - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT/#$MAX_RETRY_COUNT)"
+		sleep $RETRY_INTERVAL
+		mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >"$PK_BUFF" 2>$ERR_BUFF
+		local RC=$?
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+	done
+
+	write_out "         Visiting all PK values and mounting partitions for table '$TABLE_NAME'"
+	local PART_COUNT=0
+	local LAST_PK
+	while read -e PK; do
+		LAST_PK=$PK
+		if [ -z "$PART_MIN_VAL" ]; then
+			PART_MIN_VAL=$PK
+			PART_LINE_COUNT=0
+		fi
+		((PART_LINE_COUNT++))
+		if [ $PART_LINE_COUNT -eq $LIMIT_PARTITION_SIZE_ROWS ]; then
+			local LINE="$TABLE_NAME:p:$COL_NAME:$PART_MIN_VAL:$PK"
+			echo "$LINE" >>$TABLE_LIST_FILE
+			PART_MIN_VAL=
+			((PART_COUNT++))
+			write_out "         Mounted partition #$PART_COUNT for table '$TABLE_NAME'"
+			local CANCEL=`cat $CANCEL_FILE`
+			[ $CANCEL -eq 0 ] || break
+		fi
+	done <"$PK_BUFF"
+	rm "$PK_BUFF"
+
+	if [ -n "$PART_MIN_VAL" ]; then
+		local LINE="$TABLE_NAME:p:$COL_NAME:$PART_MIN_VAL:$LAST_PK"
+		echo "$LINE" >>$TABLE_LIST_FILE
+	fi
+	write_out "         Partitioning finished for table '$TABLE_NAME'"
+}
+
+function split_table_pk_remote()
+{
+	local TABLE_NAME="$1"
+	local COL_NAME="$2"
 
 	#get min
 	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
@@ -1251,7 +1313,7 @@ function split_table_pk()
 		local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 		PERCENT=`echo "scale=0; ($PART_MIN_VAL - $MIN_VAL) * 100 / ($MAX_VAL - $MIN_VAL + 1)" | bc`
 		write_out "      Table '$TABLE_NAME': reading partition: >>$PART_MIN_VAL ($PERCENT%)"
-		local QUERY="select max($COL_NAME) from (select $COL_NAME from $TABLE_NAME where $COL_NAME between $PART_MIN_VAL and $MAX_VAL order by 1 limit $LIMIT_TRANSACTION_LENGTH_ROWS) x"
+		local QUERY="select max($COL_NAME) from (select $COL_NAME from $TABLE_NAME where $COL_NAME between $PART_MIN_VAL and $MAX_VAL order by 1 limit $LIMIT_PARTITION_SIZE_ROWS) x"
 
 		local RETRY_COUNT=1
 		mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
@@ -1275,7 +1337,6 @@ function split_table_pk()
 		local PART_MAX_VAL=`cat $OUT_BUFF`
 		rm $OUT_BUFF
 		if [ -z "$PART_MAX_VAL" -o "$PART_MAX_VAL" == "NULL" ]; then
-			write_out "      Partitioning finished for table '$TABLE_NAME'"
 			break
 		fi
 		local LINE="$TABLE_NAME:p:$COL_NAME:$PART_MIN_VAL:$PART_MAX_VAL"
@@ -1323,7 +1384,7 @@ function split_table_ts()
 	while [ $LAST_BATCH -eq 0 -a $CANCEL -eq 0 ]; do
 		local BATCH_MIN_VAL_UNIX=`date -d "$BATCH_MIN_VAL" +%s`
 		#add number of days
-		local BATCH_MAX_VAL_UNIX=$((BATCH_MIN_VAL_UNIX+LIMIT_TRANSACTION_LENGTH_SECS-1))
+		local BATCH_MAX_VAL_UNIX=$((BATCH_MIN_VAL_UNIX+LIMIT_PARTITION_SIZE_SECS-1))
 		if [ $BATCH_MAX_VAL_UNIX -gt $TABLE_MAX_VAL_UNIX ]; then
 			BATCH_MAX_VAL_UNIX=$TABLE_MAX_VAL_UNIX
 			LAST_BATCH=1
@@ -1346,10 +1407,10 @@ function split_table_rownum()
 	local TABLE_NAME="$1"
 	local ROWS="$2"
 
-	write_out "      Partitioning table '$TABLE_NAME' by row number ($LIMIT_TRANSACTION_LENGTH_ROWS rows per partition)"
+	write_out "      Partitioning table '$TABLE_NAME' by row number ($LIMIT_PARTITION_SIZE_ROWS rows per partition)"
 	local FIRST=1
 	while [ $FIRST -le $ROWS ]; do
-		local LAST=$((FIRST+LIMIT_TRANSACTION_LENGTH_ROWS-1))
+		local LAST=$((FIRST+LIMIT_PARTITION_SIZE_ROWS-1))
 		echo "$TABLE:n::$FIRST:$LAST" >>$TABLE_LIST_FILE
 		local FIRST=$((LAST+1))
 	done
@@ -1404,7 +1465,7 @@ function th_copy_table_data()
 function usage()
 {
 	echo "Usage:" 
-	echo "$0 [ -A ] [ -E ] [ -R ] [ -S ] [ -T ] [ -U ] [ -V ] [ -a ] [ -d <login path> ] [ -i <file> ] [ -k ] [ -l <limit> ] [ -r ] -s <login path> [ -n <threads> ] [ -t ] [ <schema> [ <table> | @<table list file>] ]"
+	echo "$0 [ -A ] [ -E ] [ -R ] [ -S ] [ -T ] [ -U ] [ -V ] [ -a ] [ -b <dir> ] [ -d <login path> ] [ -h ] [ -i <file> ] [ -k ] [ -l <size> ] [ -r ] -s <login path> [ -n <threads> ] [ -t ] [ <schema> [ <table> | @<table list file>] ]"
 	echo "   -A: Activate AWS Mode. See below."
 	echo "   -E: Copy events"
 	echo "   -G: Copy grants"
@@ -1414,17 +1475,16 @@ function usage()
 	echo "   -U: Copy only users and roles"
 	echo "   -V: Copy views"
 	echo "   -a: When in AWS mode, copy structure, copy all data, and then recreate virtual columns and copy triggers. Can't be used with -f."
+	echo "   -b: When partitioning, use a local buffer, in directory <dir>, with PK values. This makes partitioning faster. The FS holding <dir> cannot be small."
 	echo "   -d: For destination, use <login path> with destination configuration (hostname, port, username, password)."
 	echo "       Default: 'client'."
 	echo "   -f: When in AWS mode, finish copy: recreate virtual columns and copy triggers. Can't be used with -a."
+	echo "   -h: Display help and exit"
 	echo "   -i: Ignore tables listed in <file>"
 	echo "   -k: Keep table structure: if destination table already exists, dont't recreate it, just copy new records."
-	echo "   -l: Limit table partition size when reading data from source table."
-	echo "		<limit>: must be in the following format: <size>/<days>"
-	echo "		Each table that has more than <size> Gb is splitted in partitions. Split rule: if such table has an indexed timestamp column, each partition will have <days> days. If not, each partition wil have <size> Gb."
+	echo "   -l: Split tables using max partition size = <size>."
+	echo "		<size>: max partition size (Gb) - must be between 1 and 99"
 	echo "		Size is calculated from table statistics (average row length)."
-	echo "			<size>: Min: 1. Max: 999.999"
-	echo "			<days>: Min: 1. Max: 100"
 	echo "      If environment variable MY_MIRROR_TXN_LEN_FORCE_LIMIT is set, for tables partitioned by PK, each partition will have no more than <MY_MIRROR_TXN_LEN_FORCE_LIMIT> rows, even if average row length is very small."
 	echo "   -s: Use login path <login path> as source instance"
 	echo "       Required."
@@ -1449,37 +1509,24 @@ function validate_options()
 	[ -n "$DST" ] || { echo "Option 'd' is required"; usage; return 1; }
 
 	#options -r and -l can't be used together
-	if [ -n "$LIMIT_TRANSACTION_LENGTH" -a $RESUME -eq 1 ]; then
+	if [ $LIMIT_PARTITION_SIZE -ne 0 -a $RESUME -eq 1 ]; then
 		write_out "Options -l and -r cannot be used together"
 		return 1
 	fi
 
-	if [ -n "$LIMIT_TRANSACTION_LENGTH" ]; then
-		local AUX="${LIMIT_TRANSACTION_LENGTH//[^\/]}"
-		local COUNT="${#AUX}"
-		if [ $COUNT -ne 1 ]; then
-			write_out "Invalid value for transaction length limit"
+	if [ -n "$LIMIT_PARTITION_SIZE" ]; then
+		#partition size limit
+		if [ $LIMIT_PARTITION_SIZE -lt 0 -o $LIMIT_PARTITION_SIZE -gt 99 ]; then
+			write_out "Invalid value for partition size limit"
 			usage
 			return 1
 		fi
-		LIMIT_TRANSACTION_LENGTH_SIZE=`echo $LIMIT_TRANSACTION_LENGTH | cut -d / -f 1`
-		LIMIT_TRANSACTION_LENGTH_DAYS=`echo $LIMIT_TRANSACTION_LENGTH | cut -d / -f 2`
-		if [ -z "$LIMIT_TRANSACTION_LENGTH_DAYS" ]; then
-			write_out "Invalid value for transaction length limit"
-			usage
-			return 1
-		fi
-		LIMIT_TRANSACTION_LENGTH_SECS=`echo scale=0\; $LIMIT_TRANSACTION_LENGTH_DAYS \* 60 \* 60 \* 24 / 1 | bc`
-		if [ $LIMIT_TRANSACTION_LENGTH_SECS -eq 0 ]; then
-			write_out "Invalid value for transaction length limit"
-			usage
-			return 1
-		fi
+	fi
 
-		#transaction length limit
-		if [ $LIMIT_TRANSACTION_LENGTH_SIZE -lt 1 -o $LIMIT_TRANSACTION_LENGTH_SIZE -gt 999999 ]; then
-			write_out "Invalid value for transaction length limit"
-			usage
+	#partitioning local dir must exist
+	if [ -n "$PART_LOCAL_DIR" ]; then
+		if ! [ -d "$PART_LOCAL_DIR" ]; then
+			write_out "Directory '$PART_LOCAL_DIR' not found"
 			return 1
 		fi
 	fi
