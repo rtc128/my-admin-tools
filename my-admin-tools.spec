@@ -10,6 +10,7 @@ Source0:			 my-admin-tools.tar.gz
 %description
 Administration tools for MySQL:
 - Analyze all tables: my-analyze-all-tables
+- Compare databases: my-db-compare
 - Drop all events: my-drop-all-events
 - Drop all routines: my-drop-all-routines
 - Drop all schemas: my-drop-all-schemas
@@ -30,6 +31,7 @@ install -d -m 0755 $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-analyze-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-count $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-data $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-db-compare $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-events $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-routines $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-schemas $RPM_BUILD_ROOT/usr/bin
@@ -56,6 +58,7 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-analyze-all-tables
 /usr/bin/my-compare-count
 /usr/bin/my-compare-data
+/usr/bin/my-db-compare
 /usr/bin/my-drop-all-events
 /usr/bin/my-drop-all-routines
 /usr/bin/my-drop-all-schemas
@@ -79,6 +82,11 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Thu Mar 5 2026 Rodrigo Tassinari 1.4.9
+- my-drop-all-tables: Better logs
+- my-mirror: Support for defering indexes when copying full database from AWS RDS
+- New tool: my-db-compare
 
 * Thu Feb 12 2026 Rodrigo Tassinari 1.4.8
 - my-mirror: New procedure for better partitioning performance
