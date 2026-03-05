@@ -1,30 +1,55 @@
 #!/bin/bash
 
-function usage()
+function confirm()
 {
-	echo "my-admin-tools: my-drop-all-tables - Drop all tables in a schema"
-	echo "Usage: $0 [ -l <path> ] <schema>"
-	echo "	 -l: use login path <path>"
-	echo "			Default: 'client'"
-	echo "Credentials must be saved using 'mysql_config_editor'"
+	if [ $ANSWER_YES -eq 1 ]; then
+		return 0
+	fi
+	echo -n "Are you sure you wanna drop all schemas (you must type 'yes'): "
+	read ANSWER
+	[ "$ANSWER" == "yes" ] || return 1
 }
 
-function generate_script()
+function drop_one()
 {
-	local SCRIPT=$1
+	local TABLE="$1"
+	local QUERY="drop table \`$TABLE\`"
+	local SCRIPT=`mktemp /tmp/my-admin-tools.XXXXXX`
 
 	echo "set foreign_key_checks = off;" >$SCRIPT
-	QUERY="select concat('drop table ', table_name, ';') from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE'"
-	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >>$SCRIPT || return 1
+	echo "$QUERY" >>$SCRIPT
+	write_out "   $TABLE"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH $SCHEMA <$SCRIPT 2>$ERR_BUFF || return 1
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	return $RC
+}
+
+function list_tables()
+{
+	local OUTPUT=$1
+
+	QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUTPUT 2>$ERR_BUFF || return 1
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	return $RC
 }
 
 function run()
 {
 	LOGIN_PATH=client
-	while getopts "l:" opt; do
+	ANSWER_YES=0
+	while getopts "l:y" opt; do
 		case $opt in
 			l)
 				LOGIN_PATH=$OPTARG;;
+			y)
+				ANSWER_YES=1;;
 			*)
 				echo "Unknown option '$opt'" >&2
 				usage
@@ -38,12 +63,47 @@ function run()
 		usage
 		return 1
 	fi
-	SCHEMA=$1
+	SCHEMA="$1"
 
-	local SCRIPT=`mktemp /tmp/my-admin-tools.XXXXXX`
-	generate_script $SCRIPT || return 1
-	mysql --login-path=$LOGIN_PATH -vvv $SCHEMA <$SCRIPT || return 1
-	rm $SCRIPT
+	confirm || return 1
+	local TABLE_LIST_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+	list_tables $TABLE_LIST_FILE || { rm $TABLE_LIST_FILE; return 1; }
+	write_out "Dropping tables"
+	while read -e TABLE; do
+		drop_one "$TABLE" || { rm $TABLE_LIST_FILE; return 1; }
+	done <$TABLE_LIST_FILE
+
+	rm $TABLE_LIST_FILE
+}
+
+function usage()
+{
+	echo "*** my-admin-tools ***"
+	echo "my-drop-all-tables - Drop all tables in a schema"
+	echo "Usage: $0 [ -l <path> ] <schema>"
+	echo "	 -l: use login path <path>"
+	echo "			Default: 'client'"
+	echo "Credentials must be saved using 'mysql_config_editor'"
+}
+
+function write_file_out()
+{
+	local OUT_F="$1"
+	local SIZE=`stat -c %s "$OUT_F"`
+	if [ $SIZE -eq 0 ]; then
+		return 0
+	fi
+	local TS=`date +"%d %H:%M:%S"`
+	local MSG="[$TS]\n`cat \"$OUT_F\" | sed -e 's/^/\t/'`"
+	echo -e "$MSG"
+	return 0
+}
+
+function write_out()
+{
+	local MSG="$1"
+	local TS=`date +"%d %H:%M:%S"`
+	echo -e "[$TS] $MSG"
 }
 
 run $*
