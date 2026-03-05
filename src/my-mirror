@@ -84,8 +84,7 @@ function copy_aws()
 	fi
 	if [ $FINISH_MODE -eq 0 ]; then
 		if [ $RESUME -eq 0 ]; then
-			write_out "Copying structure from AWS RDS"
-			write_out "Listing schemas"
+			write_out "Copying tables structures"
 			list_schemas $SCHEMA_LIST_FILE || return 1
 			copy_aws_startup || return 1
 		fi
@@ -96,14 +95,8 @@ function copy_aws()
 	if [ $COPY_ALL -eq 1 ]; then
 		CREATE_TABLES=0
 		ONLY_TABLE_STRUCTURE=0
-		if [ $RESUME -eq 0 ]; then
-			list_all_tables || return 1
-		fi
-		touch "$VALID_PENDING_STRUCT_FILE"
-		write_out "Copying table data"
-		copy_all_tables || return 1
-		copy_virtual_columns || return 1
-		copy_full_triggers || return 1
+		copy_all_table_data || return 1
+		copy_aws_finish || return 1
 		rm -fr "$DST_WORK_DIR/schemas"
 	fi
 
@@ -128,9 +121,7 @@ function copy_aws_startup()
 	copy_all_users || return 1
 	copy_schema_grants || return 1
 	copy_table_grants || return 1
-	create_all_views || return 1
 	create_all_routines || return 1
-	copy_full_grants || return 1
 	create_all_events || return 1
 	return 0
 }
@@ -143,6 +134,12 @@ function copy_aws_finish()
 	fi
 
 	copy_virtual_columns || return 1
+	if [ "$MY_MIRROR_DEFER_INDEXES" == "1" ]; then
+		copy_all_primary_keys || return 1
+		copy_all_attachments || return 1
+	fi
+	create_all_views || return 1
+	copy_full_grants || return 1
 	copy_full_triggers || return 1
 	return 0
 }
@@ -276,14 +273,18 @@ function create_all_tables()
 				continue
 			fi
 			write_out "      $TABLE"
-			mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE >$SQL_BUFF 2>$ERR_BUFF
+			if [ "$MY_MIRROR_DEFER_INDEXES" == "1" ]; then
+				mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE | sed -e 's/^  PRIMARY KEY.*$//' -e 's/^  KEY .*$//' -e 's/^  UNIQUE KEY .*$//' -e 's/^  CONSTRAINT .*//' -e '/^$/d' | sed -e 's/\(.*\) AUTO_INCREMENT\([, ].*\)/\1\2/' | sed -z -e 's/,\n)/\n)/g' >$SQL_BUFF 2>$ERR_BUFF
+			else
+				mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE >$SQL_BUFF 2>$ERR_BUFF
+			fi
 			local RC=$?
 			write_file_out $ERR_BUFF
 			[ $RC -eq 0 ] || { rm $DST_OBJ_LIST $ERR_BUFF $TABLE_LIST $SQL_BUFF; return 1; }
 			mysql --login-path=$DST $SCHEMA <$SQL_BUFF 2>$ERR_BUFF
 			local RC=$?
 			write_file_out $ERR_BUFF
-			[ $RC -eq 0 ] || { rm $DST_OBJ_LIST $ERR_BUFF $TABLE_LIST $SQL_BUFF; return 1; }
+			[ $RC -eq 0 ] || { write_file_out $SQL_BUFF; rm $DST_OBJ_LIST $ERR_BUFF $TABLE_LIST $SQL_BUFF; return 1; }
 		done
 	done
 	rm $DST_OBJ_LIST $ERR_BUFF $TABLE_LIST $SQL_BUFF
@@ -330,6 +331,342 @@ function copy_one_role()
 	copy_grants "$ROLE" || return 1
 }
 
+function copy_foreign_keys()
+{
+	write_out "Creating foreign keys"
+}
+
+function copy_indexes()
+{
+	write_out "Creating indexes"
+}
+
+function copy_table_attachments()
+{
+	write_out "      $TABLE"
+
+	local QUERY="show create table $TABLE"
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
+	sed -i -e 's/\t//g' $OUT_BUFF
+
+	#check if there is at least one
+	grep -E -m 1 '^  KEY|^  UNIQUE|^  CONSTRAINT' $OUT_BUFF >/dev/null
+	[ $? -eq 0 ] || { rm $OUT_BUFF; return 0; }
+
+	local SQL_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	echo "set foreign_key_checks = off;" >$SQL_BUFF
+	echo "set sql_mode = no_auto_value_on_zero;" >>$SQL_BUFF
+	echo "alter table $TABLE add (" >>$SQL_BUFF
+	grep -E '^  KEY|^  UNIQUE|^  CONSTRAINT' $OUT_BUFF >>$SQL_BUFF
+	rm $OUT_BUFF
+	echo ");" >>$SQL_BUFF
+
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	mysql --login-path=$DST $SCHEMA <$SQL_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { cat $SQL_BUFF; rm $SQL_BUFF; return 1; }
+	rm $SQL_BUFF
+	return 0
+}
+
+function copy_table_constraints()
+{
+	write_out "      $TABLE"
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+
+	#get dst table structure
+	local DST_TABLE_STRUCT=`mktemp /tmp/my-mirror.XXXXXX`
+	local QUERY="show create table $TABLE"
+	mysql --login-path=$DST -N -e "$QUERY" $SCHEMA >$DST_TABLE_STRUCT 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $DST_TABLE_STRUCT; return 1; }
+
+	local QUERY="show create table $TABLE"
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
+	sed -i -e 's/,$//' $OUT_BUFF
+	local DEF_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	grep '^  CONSTRAINT ' $OUT_BUFF | sed -e 's/^  //' >$DEF_BUFF
+	rm $OUT_BUFF
+	local SIZE=`stat -c %s $DEF_BUFF`
+	if [ $SIZE -eq 0 ]; then
+		rm $DEF_BUFF
+		return 0
+	fi
+
+	sed -i -e "s/\(CONSTRAINT .*\)/ALTER TABLE $TABLE ADD \1\;/" $DEF_BUFF
+
+	local PROC_RET_CODE=0
+	while read -e QUERY; do
+		local OBJ_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		#catch each command
+		echo "$QUERY" | cut -d '`' -f 2 >$OBJ_BUFF
+		local OBJ_NAME="`cat $OBJ_BUFF`"
+		rm $OBJ_BUFF
+		write_out "         $OBJ_NAME"
+		#if dst table already has this key, ignore it
+		grep -w "CONSTRAINT.*$OBJ_NAME" $DST_TABLE_STRUCT >/dev/null
+		local RC=$?
+		[ $RC -ne 0 ] || continue
+
+		#if there's an index with this name, drop it
+		local IDX_QUERY="select count(1) from information_schema.statistics where table_schema = '$SCHEMA' and table_name = '$TABLE' and index_name = '$OBJ_NAME'"
+		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		mysql --login-path=$DST -N -e "$IDX_QUERY" >$OUT_BUFF 2>$ERR_BUFF
+		local RC=$?
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || { rm $OUT_BUFF; PROC_RET_CODE=1; return 1; }
+		local COUNT=`cat $OUT_BUFF`
+		if [ $COUNT -gt 0 ]; then
+			local DROP_QUERY="alter table \`$TABLE\` drop key \`$OBJ_NAME\`"
+			local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+			mysql --login-path=$DST -e "$DROP_QUERY" $SCHEMA 2>$ERR_BUFF
+			local RC=$?
+			write_file_out $ERR_BUFF
+			rm $ERR_BUFF
+			[ $RC -eq 0 ] || { PROC_RET_CODE=1; return 1; }
+		fi
+
+		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		mysql --login-path=$DST -e "$QUERY" $SCHEMA 2>$ERR_BUFF
+		local RC=$?
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || { write_out "$QUERY"; PROC_RET_CODE=1; return 1; }
+	done <$DEF_BUFF
+
+	rm $DEF_BUFF $DST_TABLE_STRUCT
+	return $PROC_RET_CODE
+}
+
+function copy_table_indexes()
+{
+	write_out "      $TABLE"
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+
+	#get dst table structure
+	local DST_TABLE_STRUCT=`mktemp /tmp/my-mirror.XXXXXX`
+	local QUERY="show create table $TABLE"
+	mysql --login-path=$DST -N -e "$QUERY" $SCHEMA >$DST_TABLE_STRUCT 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $DST_TABLE_STRUCT; return 1; }
+	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $DST_TABLE_STRUCT
+	sed -i -e 's/,$//' $DST_TABLE_STRUCT
+
+	local QUERY="show create table $TABLE"
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $DST_TABLE_STRUCT $OUT_BUFF; return 1; }
+	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
+	sed -i -e 's/,$//' $OUT_BUFF
+	local DEF_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	grep -E '^  KEY|^  UNIQUE KEY' $OUT_BUFF | sed -e 's/^  //' >$DEF_BUFF
+	rm $OUT_BUFF
+	local SIZE=`stat -c %s $DEF_BUFF`
+	if [ $SIZE -eq 0 ]; then
+		rm $DST_TABLE_STRUCT $DEF_BUFF
+		return 0
+	fi
+
+	sed -i -E -e "s/(KEY .*|UNIQUE KEY .*)/ALTER TABLE $TABLE ADD \1\;/" $DEF_BUFF
+
+	local PROC_RET_CODE=0
+	while read -e QUERY; do
+		local OBJ_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		#catch each command
+		echo "$QUERY" | cut -d '`' -f 2 >$OBJ_BUFF
+		local OBJ_NAME="`cat $OBJ_BUFF`"
+		rm $OBJ_BUFF
+		write_out "         $OBJ_NAME"
+		#if dst table already has this key, ignore it
+		grep -w "$OBJ_NAME" $DST_TABLE_STRUCT >/dev/null
+		local RC=$?
+		[ $RC -ne 0 ] || continue
+
+		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		mysql --login-path=$DST -e "$QUERY" $SCHEMA 2>$ERR_BUFF
+		local RC=$?
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || { PROC_RET_CODE=1; break; }
+	done <$DEF_BUFF
+
+	rm $DEF_BUFF $DST_TABLE_STRUCT
+	return $PROC_RET_CODE
+}
+
+function copy_table_pk()
+{
+	write_out "      $TABLE"
+
+	#check if table has PK in dst
+	local QUERY="show create table $TABLE"
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	mysql --login-path=$DST -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+
+	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
+	#cat $OUT_BUFF
+	#grep '^  PRIMARY KEY' $OUT_BUFF
+	local COUNT=`grep '^  PRIMARY KEY' $OUT_BUFF | wc -l`
+	rm $OUT_BUFF
+	[ $COUNT -eq 0 ] || return 0
+
+	local QUERY="show create table $TABLE"
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	cp $OUT_BUFF /tmp/ddl.sql
+	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
+	sed -i -e 's/,$//' $OUT_BUFF
+	local DEF="`grep '^  PRIMARY' $OUT_BUFF`"
+	rm $OUT_BUFF
+	if [ -z "$DEF" ]; then
+		return 0
+	fi
+	QUERY="set sql_mode = no_auto_value_on_zero; alter table $TABLE add $DEF"
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	mysql --login-path=$DST -N -e "$QUERY" $SCHEMA 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { echo "$QUERY"; return 1; }
+
+	return 0
+}
+
+function copy_all_indexes()
+{
+	write_out "Copying indexes"
+	local SCHEMA_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+
+	list_schemas $SCHEMA_LIST_FILE || { rm $SCHEMA_LIST_FILE; return 1; }
+	local SCHEMA_LIST=`cat $SCHEMA_LIST_FILE`
+	rm $SCHEMA_LIST_FILE
+	for SCHEMA in $SCHEMA_LIST; do
+		copy_schema_indexes || return 1
+	done
+}
+
+function copy_all_attachments()
+{
+	write_out "Copying attachments (indexes and constraints)"
+	local SCHEMA_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+
+	list_schemas $SCHEMA_LIST_FILE || { rm $SCHEMA_LIST_FILE; return 1; }
+	local SCHEMA_LIST=`cat $SCHEMA_LIST_FILE`
+	rm $SCHEMA_LIST_FILE
+	for SCHEMA in $SCHEMA_LIST; do
+		copy_schema_attachments || return 1
+	done
+}
+
+function copy_all_primary_keys()
+{
+	write_out "Copying primary keys"
+	local SCHEMA_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+
+	list_schemas $SCHEMA_LIST_FILE || { rm $SCHEMA_LIST_FILE; return 1; }
+	local SCHEMA_LIST=`cat $SCHEMA_LIST_FILE`
+	rm $SCHEMA_LIST_FILE
+	for SCHEMA in $SCHEMA_LIST; do
+		copy_schema_primary_keys || return 1
+	done
+}
+
+function copy_schema_attachments()
+{
+	write_out "   $SCHEMA"
+	TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	list_tables_simple || { rm $TABLE_LIST_FILE; return 1; }
+	local TABLE_LIST=`cat $TABLE_LIST_FILE`
+	rm $TABLE_LIST_FILE
+	for TABLE in $TABLE_LIST; do
+		copy_table_attachments || return 1
+	done
+}
+
+function copy_schema_indexes()
+{
+	write_out "   $SCHEMA"
+	TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	list_tables_simple || { rm $TABLE_LIST_FILE; return 1; }
+	local TABLE_LIST=`cat $TABLE_LIST_FILE`
+	rm $TABLE_LIST_FILE
+	for TABLE in $TABLE_LIST; do
+		copy_table_indexes || return 1
+	done
+}
+
+function copy_schema_primary_keys()
+{
+	write_out "   $SCHEMA"
+	TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	list_tables_simple || { rm $TABLE_LIST_FILE; return 1; }
+	local TABLE_LIST=`cat $TABLE_LIST_FILE`
+	rm $TABLE_LIST_FILE
+	for TABLE in $TABLE_LIST; do
+		copy_table_pk || return 1
+	done
+}
+
+function copy_all_constraints()
+{
+	write_out "Copying constraints"
+	local SCHEMA_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+
+	list_schemas $SCHEMA_LIST_FILE || { rm $SCHEMA_LIST_FILE; return 1; }
+	local SCHEMA_LIST=`cat $SCHEMA_LIST_FILE`
+	rm $SCHEMA_LIST_FILE
+	for SCHEMA in $SCHEMA_LIST; do
+		copy_schema_constraints || return 1
+	done
+}
+
+function copy_schema_constraints()
+{
+	write_out "   $SCHEMA"
+	TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	list_tables_simple || { rm $TABLE_LIST_FILE; return 1; }
+	local TABLE_LIST=`cat $TABLE_LIST_FILE`
+	rm $TABLE_LIST_FILE
+	for TABLE in $TABLE_LIST; do
+		copy_table_constraints || return 1
+	done
+}
+
 function copy_tables()
 {
 	if [ $AWS -eq 0 ]; then
@@ -356,8 +693,13 @@ function copy_triggers()
 	mysqldump --login-path=$SRC --set-gtid-purged=off --no-create-info --no-data $SCHEMA | sed -e "s/\<DEFINER=\`.*\`@\`%\`/DEFINER=\`$SCHEMA\`/" | mysql --login-path=$DST $SCHEMA || return 1;
 }
 
-function copy_all_tables()
+function copy_all_table_data()
 {
+	if [ $RESUME -eq 0 ]; then
+		list_all_tables || return 1
+	fi
+	touch "$VALID_PENDING_STRUCT_FILE"
+	write_out "Copying table data"
 	for S in `ls $DST_WORK_DIR/schemas`; do
 		SCHEMA=$S
 		TABLE_LIST_FILE="$DST_WORK_DIR/schemas/$SCHEMA"
@@ -654,6 +996,19 @@ function list_tables()
 	return $CANCEL
 }
 
+function list_tables_simple()
+{
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
+	mysql --login-path=$SRC -N -e "$QUERY" >$TABLE_LIST_FILE 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { return 1; }
+
+	return 0
+}
+
 function list_tables_th()
 {
 	local FULL_TABLE=`get_next_pre_table`
@@ -718,10 +1073,10 @@ function mount_log_path()
 {
 	local DT=`date +%Y-%m-%d`
 	local TS=`date +%T`
-	local LOG_DIR=/var/log/my-admin-tools/my-mirror/$DT
-	mkdir -p $LOG_DIR || return 1
+	local LOG_COMPLETE_DIR="$LOG_DIR/$DT"
+	mkdir -p "$LOG_COMPLETE_DIR" || return 1
 	local LOG_BN=${TS}.log
-	echo $LOG_DIR/$LOG_BN
+	echo "$LOG_COMPLETE_DIR/$LOG_BN"
 }
 
 function print_options()
@@ -769,6 +1124,7 @@ function run()
 {
 	local L_TABLE
 
+	CONFIG_FILE=/etc/my-mirror.conf
 	AWS=0
 	CREATE_TABLES=1
 	IGNORE_LIST_FILE=
@@ -791,7 +1147,7 @@ function run()
 
 	local opt
 
-	while getopts "ADEFGRSTVab:d:hi:kl:n:rs:tU" opt; do
+	while getopts "ADEFGRSTVab:c:d:hi:kl:n:rs:tU" opt; do
 		case $opt in
 			A)
 				AWS=1;;
@@ -799,6 +1155,8 @@ function run()
 				COPY_ALL=1;;
 			b)
 				PART_LOCAL_DIR="$OPTARG";;
+			c)
+				CONFIG_FILE="$OPTARG";;
 			D)
 				AWS_SKIP_TO_DATA=1;;
 			E)
@@ -848,7 +1206,6 @@ function run()
 	validate_options $* || return 1
 
 	COPY_CUSTOM_TABLES=0
-	CONFIG_FILE=/etc/my-mirror.conf
 	read_config || return 1
 
 	DST_WORK_DIR="$WORK_DIR/$SRC/$DST"
@@ -862,7 +1219,7 @@ function run()
 		RETRY_INTERVAL=$MY_ADMIN_TOOLS_RETRY_INTERVAL
 	fi
 
-	local TMP_LOG_FILE=`mount_log_path` || return 1
+	local TMP_LOG_FILE="`mount_log_path`" || return 1
 	write_out "Log file: $TMP_LOG_FILE"
 	LOG_FILE="$TMP_LOG_FILE"
 	print_options || return 1
@@ -1125,6 +1482,21 @@ function copy_one_virtual_column()
 	local TABLE="$2"
 	local COLUMN="$3"
 
+	#check if column already exists in dst
+	write_out "   $SCHEMA.$TABLE.$COLUMN"
+	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+
+	local QUERY="desc $TABLE"
+	mysql --login-path=$DST -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	local COUNT=`grep -w $COLUMN $OUT_BUFF | wc -l`
+	rm $OUT_BUFF
+	[ $COUNT -eq 0 ] || return 0
+
 	local BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	local QUERY="show create table $SCHEMA.$TABLE"
 	mysql --login-path=$SRC -N -e "$QUERY" | sed -e 's/\\n/\n/g' | grep -m 1 -w $COLUMN | sed -e 's/,$//' | sed -e 's/\\/\\\\/g' >$BUFF || return 1
@@ -1150,6 +1522,11 @@ function copy_table_custom_list()
 
 function read_config()
 {
+	LOG_DIR="`crudini --get $CONFIG_FILE main log_dir 2>/dev/null`"
+	if [ -z "$LOG_DIR" ]; then
+		LOG_DIR=/var/log/my-admin-tools/my-mirror
+	fi
+
 	WORK_DIR=`crudini --get $CONFIG_FILE main work_dir 2>/dev/null`
 	if [ -z "$WORK_DIR" ]; then
 		WORK_DIR=/var/lib/my-admin-tools/my-mirror
@@ -1465,7 +1842,7 @@ function th_copy_table_data()
 function usage()
 {
 	echo "Usage:" 
-	echo "$0 [ -A ] [ -E ] [ -R ] [ -S ] [ -T ] [ -U ] [ -V ] [ -a ] [ -b <dir> ] [ -d <login path> ] [ -h ] [ -i <file> ] [ -k ] [ -l <size> ] [ -r ] -s <login path> [ -n <threads> ] [ -t ] [ <schema> [ <table> | @<table list file>] ]"
+	echo "$0 [ -A ] [ -E ] [ -R ] [ -S ] [ -T ] [ -U ] [ -V ] [ -a ] [ -b <dir> ] [ -c <file> ] [ -d <login path> ] [ -h ] [ -i <file> ] [ -k ] [ -l <size> ] [ -r ] -s <login path> [ -n <threads> ] [ -t ] [ <schema> [ <table> | @<table list file>] ]"
 	echo "   -A: Activate AWS Mode. See below."
 	echo "   -E: Copy events"
 	echo "   -G: Copy grants"
@@ -1476,6 +1853,8 @@ function usage()
 	echo "   -V: Copy views"
 	echo "   -a: When in AWS mode, copy structure, copy all data, and then recreate virtual columns and copy triggers. Can't be used with -f."
 	echo "   -b: When partitioning, use a local buffer, in directory <dir>, with PK values. This makes partitioning faster. The FS holding <dir> cannot be small."
+	echo "   -c: Set config file to <file>"
+	echo "       Default: /etc/my-mirror.conf"
 	echo "   -d: For destination, use <login path> with destination configuration (hostname, port, username, password)."
 	echo "       Default: 'client'."
 	echo "   -f: When in AWS mode, finish copy: recreate virtual columns and copy triggers. Can't be used with -a."
