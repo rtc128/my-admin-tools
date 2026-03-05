@@ -1,0 +1,100 @@
+#!/bin/bash
+
+function compare_rows()
+{
+	local QUERY="select count(1) from $TABLE"
+	write_out "         Comparing row count"
+	write_out "            $LPATH1"
+	local COUNT1=`mysql --login-path=$LPATH1 -N -e "$QUERY" $SCHEMA` || return 1
+	write_out "               $COUNT1"
+	write_out "            $LPATH2"
+	local COUNT2=`mysql --login-path=$LPATH2 -N -e "$QUERY" $SCHEMA` || return 1
+	write_out "               $COUNT2"
+	if [ $COUNT1 -ne $COUNT2 ]; then
+		return 1
+	fi
+}
+
+function compare_struct()
+{
+	write_out "         Comparing table structure"
+	local STRUCT1=`mktemp /tmp/my-db-compare.XXXXXX`
+	local STRUCT2=`mktemp /tmp/my-db-compare.XXXXXX`
+	local QUERY="desc $TABLE"
+	write_out "            $LPATH1"
+	mysql --login-path=$LPATH1 -N -e "$QUERY" $SCHEMA >$STRUCT1 || { rm $STRUCT1 $STRUCT 2; return 1; }
+	write_out "            $LPATH2"
+	mysql --login-path=$LPATH2 -N -e "$QUERY" $SCHEMA >$STRUCT2 || { rm $STRUCT1 $STRUCT 2; return 1; }
+	if ! diff $STRUCT1 $STRUCT2; then
+		write_out "Found a difference"
+		rm $STRUCT1 $STRUCT 2
+		return 1
+	fi
+}
+
+function usage()
+{
+	echo "my-db-compare: Compare structure and table lengths between 2 instances"
+	echo "Usage: $0 [ -r ] [ -s ] <login path 1> <login path 2>"
+	echo "   -r: compare row count for each table"
+	echo "   -s: compare structure for each table"
+}
+
+function run()
+{
+	if [ $# -ne 2 ]; then
+		usage
+		return 1
+	fi
+
+	CMP_ROWS=0
+	CMP_ROWS=0
+
+	while getopts "rs" OPT; do
+		case $OPT in
+			r)
+				CMP_ROWS=1;;
+			s)
+				CMP_STRUCT=1;;
+		esac
+	done
+
+	LPATH1=$1
+	LPATH2=$2
+
+	DIFF_COUNT=0
+	write_out "Listing schemas"
+	QUERY="select schema_name from information_schema.schemata where schema_name not in ('sys', 'information_schema', 'performance_schema', 'mysql') order by 1"
+	SCHEMAS=`mysql --login-path=$LPATH1 -N -e "$QUERY"` || return 1
+
+	for SCHEMA in $SCHEMAS; do
+		write_out "   Entering schema '$SCHEMA'"
+		write_out "   Listing tables"
+
+		QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE'"
+		TABLES=`mysql --login-path=$LPATH1 -N -e "$QUERY"` || return 1
+
+		for TABLE in $TABLES; do
+			write_out "      Comparing table '$TABLE'"
+			if [ $CMP_ROWS -eq 1 ]; then
+				compare_rows || return 1
+			fi
+			if [ $CMP_STRUCT -eq 1 ]; then
+				compare_struct || return 1
+			fi
+		done
+	done
+
+	write_out "No diff found!"
+}
+
+function write_out()
+{
+	MSG="$1"
+	TS=`date +"%d %H:%M:%S"`
+	echo -e "[$TS] $MSG"
+}
+
+run $*
+RC=$?
+exit $RC
