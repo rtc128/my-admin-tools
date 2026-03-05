@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.4.8
+Version:			 1.4.9
 Release:        1
 Summary:        Administration tools for MySQL
 
