@@ -10,3 +10,12 @@ my-mirror \- create mysql database replicas
 
 This is part os my-admin-tools package.
 
+.SH ENVIRONMENT
+
+MY_MIRROR_DEFER_INDEXES:
+
+	If this variable is 1 in AWS RDS mode:
+
+		- When copying table structures, indexes and constraints are ignored.
+
+		- After copying table data, indexes and constraints are created.

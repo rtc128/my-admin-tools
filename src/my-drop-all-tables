@@ -5,7 +5,7 @@ function confirm()
 	if [ $ANSWER_YES -eq 1 ]; then
 		return 0
 	fi
-	echo -n "Are you sure you wanna drop all schemas (you must type 'yes'): "
+	echo -n "Are you sure you wanna drop all tables in schema '$SCHEMA' (you must type 'yes'): "
 	read ANSWER
 	[ "$ANSWER" == "yes" ] || return 1
 }
@@ -20,7 +20,7 @@ function drop_one()
 	echo "$QUERY" >>$SCRIPT
 	write_out "   $TABLE"
 	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	mysql --login-path=$LOGIN_PATH $SCHEMA <$SCRIPT 2>$ERR_BUFF || return 1
+	mysql --login-path=$LOGIN_PATH $SCHEMA <$SCRIPT 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
@@ -33,7 +33,7 @@ function list_tables()
 
 	QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
 	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUTPUT 2>$ERR_BUFF || return 1
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUTPUT 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
