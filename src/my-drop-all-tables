@@ -37,7 +37,8 @@ function list_tables()
 	local RC=$?
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
-	return $RC
+	[ $RC -eq 0 ] || return 1
+	sed -i -z -e 's/\r\n/\n/g' $OUTPUT || return 1
 }
 
 function run()
