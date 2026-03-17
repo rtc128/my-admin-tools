@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.4.9
+Version:			 1.4.10
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -82,6 +82,9 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Tue Mar 17 2026 Rodrigo Tassinari 1.4.10
+- my-drop-all-tables: Minor fixes
 
 * Thu Mar 5 2026 Rodrigo Tassinari 1.4.9
 - my-drop-all-tables: Better logs
