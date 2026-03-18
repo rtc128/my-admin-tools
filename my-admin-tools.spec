@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.4.11
+Version:			 1.4.12
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -82,6 +82,9 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Wed Mar 18 2026 Rodrigo Tassinari 1.4.12
+- my-mirror: if data copy can be resumed, user can't use command line option, they are gonna be automatically asked
 
 * Tue Mar 17 2026 Rodrigo Tassinari 1.4.11
 - my-drop-all-tables: Added support for Windows systems
