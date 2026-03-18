@@ -76,17 +76,27 @@ function copy_aws()
 {
 	SCHEMA_LIST_FILE="$DST_WORK_DIR/.schemas"
 	VALID_PENDING_STRUCT_FILE="$DST_WORK_DIR/.valid_struct"
-	if [ $RESUME -eq 1 ]; then
-		if ! [ -f "$VALID_PENDING_STRUCT_FILE" ]; then
-			write_out "No valid pending data found - cannot resume"
-			return 1
-		fi
-	fi
 	if [ $FINISH_MODE -eq 0 ]; then
-		if [ $RESUME -eq 0 ]; then
-			write_out "Copying tables structures"
-			list_schemas $SCHEMA_LIST_FILE || return 1
-			copy_aws_startup || return 1
+		if [ -f "$VALID_PENDING_STRUCT_FILE" ]; then
+			echo -n "Data copy from a previous session can be resumed. Do you wish to resume it ('Y' or 'y' / 'N' or 'n' / CTRL+C to abort)? "
+			local ANSWER
+			read ANSWER
+			local U_ANSWER=${ANSWER^^}
+			local HANDLED_ANSWER=0
+			if [ "$U_ANSWER" == "Y" ]; then
+				RESUME=1
+				write_out "Resuming data copy"
+				HANDLED_ANSWER=1
+			fi
+			if [ "$U_ANSWER" == "N" ]; then
+				rm -f "$VALID_PENDING_STRUCT_FILE"
+				write_out "Restarting full AWS copy"
+				write_out "Copying tables structures"
+				list_schemas $SCHEMA_LIST_FILE || return 1
+				copy_aws_startup || return 1
+				HANDLED_ANSWER=1
+			fi
+			[ $HANDLED_ANSWER -eq 1 ] || { write_out "Cancelling"; return 1; }
 		fi
 	else
 		write_out "Copying database from AWS RDS (finish stage)"
@@ -100,7 +110,7 @@ function copy_aws()
 		rm -fr "$DST_WORK_DIR/schemas"
 	fi
 
-	rm -f "$TABLE_LIST_FILE" "$SCHEMA_LIST_FILE" "$VALID_PENDING_STRUCT_FILE"
+	rm -f "$TABLE_LIST_FILE" "$SCHEMA_LIST_FILE"
 	return 0
 }
 
@@ -115,6 +125,7 @@ function copy_aws_startup()
 	RC=$?
 	[ $RC -eq 0 ] || return 1
 
+	rm -f "$VALID_PENDING_STRUCT_FILE"
 	create_all_schemas || return 1
 	create_all_tables || return 1
 	drop_virtual_columns || return 1
@@ -1079,6 +1090,13 @@ function mount_log_path()
 	echo "$LOG_COMPLETE_DIR/$LOG_BN"
 }
 
+function print_env()
+{
+	if [ "$MY_MIRROR_DEFER_INDEXES" == "1" ]; then
+		write_out "Defering indexes and constraints creation"
+	fi
+}
+
 function print_options()
 {
 	if [ -n "$SRC" ]; then
@@ -1115,9 +1133,6 @@ function print_options()
 	if [ -n "$PART_LOCAL_DIR" ]; then
 		write_out "Local partitiong buffer directory: ${PART_LOCAL_DIR}"
 	fi
-	if [ $RESUME -eq 1 ]; then
-		write_out "Resume data copy mode: ON"
-	fi
 }
 
 function run()
@@ -1139,15 +1154,15 @@ function run()
 	ONLY_TRIGGERS=0
 	ONLY_TABLE_STRUCTURE=0
 	COPY_VIEWS=0
-	RESUME=0
 	TH_COUNT=1
 	COPY_ALL=0
 	AWS_SKIP_TO_DATA=0
 	PART_LOCAL_DIR=
+	RESUME=0
 
 	local opt
 
-	while getopts "ADEFGRSTVab:c:d:hi:kl:n:rs:tU" opt; do
+	while getopts "ADEFGRSTVab:c:d:hi:kl:n:s:tU" opt; do
 		case $opt in
 			A)
 				AWS=1;;
@@ -1189,8 +1204,6 @@ function run()
 				CREATE_TABLES=0;;
 			n)
 				TH_COUNT=$OPTARG;;
-			r)
-				RESUME=1;;
 			s)
 				SRC=$OPTARG;;
 			t)
@@ -1223,6 +1236,7 @@ function run()
 	write_out "Log file: $TMP_LOG_FILE"
 	LOG_FILE="$TMP_LOG_FILE"
 	print_options || return 1
+	print_env
 
 	CANCEL_FILE=`mktemp /tmp/my-mirror.XXXXXX`
 	echo 0 >$CANCEL_FILE || return 1
@@ -1842,7 +1856,7 @@ function th_copy_table_data()
 function usage()
 {
 	echo "Usage:" 
-	echo "$0 [ -A ] [ -E ] [ -R ] [ -S ] [ -T ] [ -U ] [ -V ] [ -a ] [ -b <dir> ] [ -c <file> ] [ -d <login path> ] [ -h ] [ -i <file> ] [ -k ] [ -l <size> ] [ -r ] -s <login path> [ -n <threads> ] [ -t ] [ <schema> [ <table> | @<table list file>] ]"
+	echo "$0 [ -A ] [ -E ] [ -R ] [ -S ] [ -T ] [ -U ] [ -V ] [ -a ] [ -b <dir> ] [ -c <file> ] [ -d <login path> ] [ -h ] [ -i <file> ] [ -k ] [ -l <size> ] -s <login path> [ -n <threads> ] [ -t ] [ <schema> [ <table> | @<table list file>] ]"
 	echo "   -A: Activate AWS Mode. See below."
 	echo "   -E: Copy events"
 	echo "   -G: Copy grants"
@@ -1869,7 +1883,6 @@ function usage()
 	echo "       Required."
 	echo "   -n: Number of threads used in the following operations: table splitting (if transaction length limit [-l option ] is active); table data copy"
 	echo "       Min: 1. Max: 20. Default: 1."
-	echo "   -r: Resume a cancelled table data copy. Can also be used in AWS Mode. Can't be used with -l."
 	echo "   -t: For tables, copy only triggers"
 	echo "   schema: Schema to be copied"
 	echo "      Default: copy all schemas"
@@ -1886,12 +1899,6 @@ function validate_options()
 {
 	[ -n "$SRC" ] || { echo "Option 's' is required"; usage; return 1; }
 	[ -n "$DST" ] || { echo "Option 'd' is required"; usage; return 1; }
-
-	#options -r and -l can't be used together
-	if [ $LIMIT_PARTITION_SIZE -ne 0 -a $RESUME -eq 1 ]; then
-		write_out "Options -l and -r cannot be used together"
-		return 1
-	fi
 
 	if [ -n "$LIMIT_PARTITION_SIZE" ]; then
 		#partition size limit
