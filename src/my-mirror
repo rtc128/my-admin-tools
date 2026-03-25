@@ -97,6 +97,10 @@ function copy_aws()
 				HANDLED_ANSWER=1
 			fi
 			[ $HANDLED_ANSWER -eq 1 ] || { write_out "Cancelling"; return 1; }
+		else
+			write_out "Copying tables structures"
+			list_schemas $SCHEMA_LIST_FILE || return 1
+			copy_aws_startup || return 1
 		fi
 	else
 		write_out "Copying database from AWS RDS (finish stage)"
@@ -106,6 +110,7 @@ function copy_aws()
 		CREATE_TABLES=0
 		ONLY_TABLE_STRUCTURE=0
 		copy_all_table_data || return 1
+		rm -f "$VALID_PENDING_STRUCT_FILE"
 		copy_aws_finish || return 1
 		rm -fr "$DST_WORK_DIR/schemas"
 	fi
@@ -145,10 +150,8 @@ function copy_aws_finish()
 	fi
 
 	copy_virtual_columns || return 1
-	if [ "$MY_MIRROR_DEFER_INDEXES" == "1" ]; then
-		copy_all_primary_keys || return 1
-		copy_all_attachments || return 1
-	fi
+	copy_all_indexes || return 1
+	copy_all_constraints || return 1
 	create_all_views || return 1
 	copy_full_grants || return 1
 	copy_full_triggers || return 1
@@ -284,11 +287,7 @@ function create_all_tables()
 				continue
 			fi
 			write_out "      $TABLE"
-			if [ "$MY_MIRROR_DEFER_INDEXES" == "1" ]; then
-				mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE | sed -e 's/^  PRIMARY KEY.*$//' -e 's/^  KEY .*$//' -e 's/^  UNIQUE KEY .*$//' -e 's/^  CONSTRAINT .*//' -e '/^$/d' | sed -e 's/\(.*\) AUTO_INCREMENT\([, ].*\)/\1\2/' | sed -z -e 's/,\n)/\n)/g' >$SQL_BUFF 2>$ERR_BUFF
-			else
-				mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE >$SQL_BUFF 2>$ERR_BUFF
-			fi
+			mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE 2>$ERR_BUFF | sed -e 's/^  KEY .*$//' -e 's/^  UNIQUE KEY .*$//' -e 's/^  CONSTRAINT .*//' -e '/^$/d' | sed -e 's/\(.*\) AUTO_INCREMENT\([, ].*\)/\1\2/' | sed -z -e 's/,\n)/\n)/g' >$SQL_BUFF 2>$ERR_BUFF
 			local RC=$?
 			write_file_out $ERR_BUFF
 			[ $RC -eq 0 ] || { rm $DST_OBJ_LIST $ERR_BUFF $TABLE_LIST $SQL_BUFF; return 1; }
@@ -392,28 +391,18 @@ function copy_table_attachments()
 function copy_table_constraints()
 {
 	write_out "      $TABLE"
+	local QUERY="show create table $TABLE"
 	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-
-	#get dst table structure
-	local DST_TABLE_STRUCT=`mktemp /tmp/my-mirror.XXXXXX`
-	local QUERY="show create table $TABLE"
-	mysql --login-path=$DST -N -e "$QUERY" $SCHEMA >$DST_TABLE_STRUCT 2>$ERR_BUFF
-	local RC=$?
-	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $DST_TABLE_STRUCT; return 1; }
-
-	local QUERY="show create table $TABLE"
 	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	[ $RC -eq 0 ] || { $OUT_BUFF; return 1; }
 	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
 	sed -i -e 's/,$//' $OUT_BUFF
 	local DEF_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	grep '^  CONSTRAINT ' $OUT_BUFF | sed -e 's/^  //' >$DEF_BUFF
+	grep -E '^  CONSTRAINT' $OUT_BUFF | sed -e 's/^  //' >$DEF_BUFF
 	rm $OUT_BUFF
 	local SIZE=`stat -c %s $DEF_BUFF`
 	if [ $SIZE -eq 0 ]; then
@@ -421,50 +410,19 @@ function copy_table_constraints()
 		return 0
 	fi
 
-	sed -i -e "s/\(CONSTRAINT .*\)/ALTER TABLE $TABLE ADD \1\;/" $DEF_BUFF
+	sed -i -E -e "s/^(CONSTRAINT .*)/ALTER TABLE $TABLE ADD \1\;/" $DEF_BUFF
 
 	local PROC_RET_CODE=0
 	while read -e QUERY; do
-		local OBJ_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		#catch each command
-		echo "$QUERY" | cut -d '`' -f 2 >$OBJ_BUFF
-		local OBJ_NAME="`cat $OBJ_BUFF`"
-		rm $OBJ_BUFF
-		write_out "         $OBJ_NAME"
-		#if dst table already has this key, ignore it
-		grep -w "CONSTRAINT.*$OBJ_NAME" $DST_TABLE_STRUCT >/dev/null
-		local RC=$?
-		[ $RC -ne 0 ] || continue
-
-		#if there's an index with this name, drop it
-		local IDX_QUERY="select count(1) from information_schema.statistics where table_schema = '$SCHEMA' and table_name = '$TABLE' and index_name = '$OBJ_NAME'"
 		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		mysql --login-path=$DST -N -e "$IDX_QUERY" >$OUT_BUFF 2>$ERR_BUFF
+		mysql --login-path=$DST -e "set foreign_key_checks=off, sql_mode=''; $QUERY" "$SCHEMA" 2>$ERR_BUFF
 		local RC=$?
 		write_file_out $ERR_BUFF
 		rm $ERR_BUFF
-		[ $RC -eq 0 ] || { rm $OUT_BUFF; PROC_RET_CODE=1; return 1; }
-		local COUNT=`cat $OUT_BUFF`
-		if [ $COUNT -gt 0 ]; then
-			local DROP_QUERY="alter table \`$TABLE\` drop key \`$OBJ_NAME\`"
-			local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-			mysql --login-path=$DST -e "$DROP_QUERY" $SCHEMA 2>$ERR_BUFF
-			local RC=$?
-			write_file_out $ERR_BUFF
-			rm $ERR_BUFF
-			[ $RC -eq 0 ] || { PROC_RET_CODE=1; return 1; }
-		fi
-
-		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		mysql --login-path=$DST -e "$QUERY" $SCHEMA 2>$ERR_BUFF
-		local RC=$?
-		write_file_out $ERR_BUFF
-		rm $ERR_BUFF
-		[ $RC -eq 0 ] || { write_out "$QUERY"; PROC_RET_CODE=1; return 1; }
+		[ $RC -eq 0 ] || { write_out "$QUERY"; PROC_RET_CODE=1; break; }
 	done <$DEF_BUFF
 
-	rm $DEF_BUFF $DST_TABLE_STRUCT
+	rm $DEF_BUFF
 	return $PROC_RET_CODE
 }
 
@@ -473,17 +431,6 @@ function copy_table_indexes()
 	write_out "      $TABLE"
 	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 
-	#get dst table structure
-	local DST_TABLE_STRUCT=`mktemp /tmp/my-mirror.XXXXXX`
-	local QUERY="show create table $TABLE"
-	mysql --login-path=$DST -N -e "$QUERY" $SCHEMA >$DST_TABLE_STRUCT 2>$ERR_BUFF
-	local RC=$?
-	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $DST_TABLE_STRUCT; return 1; }
-	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $DST_TABLE_STRUCT
-	sed -i -e 's/,$//' $DST_TABLE_STRUCT
-
 	local QUERY="show create table $TABLE"
 	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
@@ -491,7 +438,7 @@ function copy_table_indexes()
 	local RC=$?
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $DST_TABLE_STRUCT $OUT_BUFF; return 1; }
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
 	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
 	sed -i -e 's/,$//' $OUT_BUFF
 	local DEF_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
@@ -499,34 +446,31 @@ function copy_table_indexes()
 	rm $OUT_BUFF
 	local SIZE=`stat -c %s $DEF_BUFF`
 	if [ $SIZE -eq 0 ]; then
-		rm $DST_TABLE_STRUCT $DEF_BUFF
+		rm $DEF_BUFF
 		return 0
 	fi
 
-	sed -i -E -e "s/(KEY .*|UNIQUE KEY .*)/ALTER TABLE $TABLE ADD \1\;/" $DEF_BUFF
+	if [ "$DEBUG" == "1" ]; then
+		echo "Definition buffer before replacing:" >&2
+		cat $DEF_BUFF >&2
+	fi
+	sed -i -E -e "s/^(KEY .*|UNIQUE KEY .*)/ALTER TABLE \`$TABLE\` ADD \1\;/" $DEF_BUFF
+	if [ "$DEBUG" == "1" ]; then
+		echo "Definition buffer after replacing:" >&2
+		cat $DEF_BUFF >&2
+	fi
 
 	local PROC_RET_CODE=0
 	while read -e QUERY; do
-		local OBJ_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		#catch each command
-		echo "$QUERY" | cut -d '`' -f 2 >$OBJ_BUFF
-		local OBJ_NAME="`cat $OBJ_BUFF`"
-		rm $OBJ_BUFF
-		write_out "         $OBJ_NAME"
-		#if dst table already has this key, ignore it
-		grep -w "$OBJ_NAME" $DST_TABLE_STRUCT >/dev/null
-		local RC=$?
-		[ $RC -ne 0 ] || continue
-
 		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		mysql --login-path=$DST -e "$QUERY" $SCHEMA 2>$ERR_BUFF
+		mysql --login-path=$DST -e "set sql_mode=''; $QUERY" "$SCHEMA" 2>$ERR_BUFF
 		local RC=$?
 		write_file_out $ERR_BUFF
 		rm $ERR_BUFF
-		[ $RC -eq 0 ] || { PROC_RET_CODE=1; break; }
+		[ $RC -eq 0 ] || { write_out "   $QUERY"; PROC_RET_CODE=1; break; }
 	done <$DEF_BUFF
 
-	rm $DEF_BUFF $DST_TABLE_STRUCT
+	rm $DEF_BUFF
 	return $PROC_RET_CODE
 }
 
@@ -601,6 +545,19 @@ function copy_all_attachments()
 	rm $SCHEMA_LIST_FILE
 	for SCHEMA in $SCHEMA_LIST; do
 		copy_schema_attachments || return 1
+	done
+}
+
+function copy_all_indexes()
+{
+	write_out "Copying indexes"
+	local SCHEMA_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+
+	list_schemas $SCHEMA_LIST_FILE || { rm $SCHEMA_LIST_FILE; return 1; }
+	local SCHEMA_LIST=`cat $SCHEMA_LIST_FILE`
+	rm $SCHEMA_LIST_FILE
+	for SCHEMA in $SCHEMA_LIST; do
+		copy_schema_indexes || return 1
 	done
 }
 
@@ -701,7 +658,7 @@ function copy_tables()
 function copy_triggers()
 {
 	write_out "Copying triggers [$SCHEMA]"
-	mysqldump --login-path=$SRC --set-gtid-purged=off --no-create-info --no-data $SCHEMA | sed -e "s/\<DEFINER=\`.*\`@\`%\`/DEFINER=\`$SCHEMA\`/" | mysql --login-path=$DST $SCHEMA || return 1;
+	mysqldump --login-path=$SRC --no-create-info --no-data $SCHEMA | sed -e "s/\<DEFINER=\`.*\`@\`%\`/DEFINER=\`$SCHEMA\`/" | mysql --login-path=$DST $SCHEMA || return 1;
 }
 
 function copy_all_table_data()
@@ -726,7 +683,7 @@ function copy_all_users()
 	write_out "Creating users"
 	QUERY="select user, host, authentication_string is null from mysql.user where user != '' and user not like 'mysql.%' and concat(user, '@', host) != (select current_user())"
 	local FILTER="user != '' and user not like 'mysql.%' and concat(user, '@', host) != (select current_user()) and user not like 'AWS%' and user not like 'rds%'"
-	mysqldump --login-path=$SRC --set-gtid-purged=off --skip-triggers --skip-add-locks --skip-disable-keys --skip-add-drop-table --no-create-info --skip-lock-tables --insert-ignore --complete-insert --skip-extended-insert --hex-blob --set-gtid-purged=off --where "$FILTER" mysql user | mysql --login-path=$DST mysql || return 1
+	mysqldump --login-path=$SRC --set-gtid-purged=off --skip-triggers --skip-add-locks --skip-disable-keys --skip-add-drop-table --no-create-info --skip-lock-tables --insert-ignore --complete-insert --skip-extended-insert --hex-blob --where "$FILTER" mysql user | mysql --login-path=$DST mysql || return 1
 	mysql --login-path=$DST -e "flush privileges" || return 1
 }
 
@@ -960,7 +917,7 @@ function list_all_tables()
 function list_schemas()
 {
 	local OUT_FILE="$1"
-	local QUERY="select schema_name from information_schema.schemata where schema_name not in ('mysql', 'information_schema', 'performance_schema', 'sys')"
+	local QUERY="select schema_name from information_schema.schemata where schema_name not in ('mysql', 'information_schema', 'performance_schema', 'sys') order by 1"
 	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	if [ -n "$OUT_FILE" ]; then
 		mysql --login-path=$SRC -N -e "$QUERY" >"$OUT_FILE" 2>$ERR_BUFF
@@ -1092,9 +1049,6 @@ function mount_log_path()
 
 function print_env()
 {
-	if [ "$MY_MIRROR_DEFER_INDEXES" == "1" ]; then
-		write_out "Defering indexes and constraints creation"
-	fi
 }
 
 function print_options()
@@ -1338,7 +1292,8 @@ function copy_one_table()
 	RETRY_COUNT=0
 	EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
 	IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	mysqldump --login-path=$SRC --hex-blob --set-gtid-purged=off $L_DUMP_OPT --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
+	local EXP_OPT="--login-path=$SRC --set-gtid-purged=off --hex-blob $L_DUMP_OPT --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers"
+	mysqldump $EXP_OPT $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
 	EXP_SIZE=`stat -c %s $EXP_ERR_BUFF`
 	IMP_SIZE=`stat -c %s $IMP_ERR_BUFF`
 	while [ $EXP_SIZE -ne 0 -o $IMP_SIZE -ne 0 ]; do
@@ -1362,7 +1317,7 @@ function copy_one_table()
 		write_out "$TXT"
 		sleep $RETRY_INTERVAL
 
-		mysqldump --login-path=$SRC --set-gtid-purged=off $L_DUMP_OPT --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | sed -e "s/50017 DEFINER=\`.*\`@\`%\`/50017 DEFINER=\`$SCHEMA\`/" | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
+		mysqldump $EXP_OPT $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | sed -e "s/50017 DEFINER=\`.*\`@\`%\`/50017 DEFINER=\`$SCHEMA\`/" | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
 		EXP_SIZE=`stat -c %s $EXP_ERR_BUFF`
 		IMP_SIZE=`stat -c %s $IMP_ERR_BUFF`
 	done
@@ -1443,7 +1398,7 @@ function copy_one_table_interval()
 		fi
 	fi
 
-	local EXP_OPT="--login-path=$SRC --insert-ignore --hex-blob --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers --skip-disable-keys"
+	local EXP_OPT="--login-path=$SRC --set-gtid-purged=off --insert-ignore --hex-blob --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers --skip-disable-keys"
 	if [ $CREATE_TABLES -eq 0 ]; then
 		local EXP_OPT="$EXP_OPT --no-create-info"
 	fi
