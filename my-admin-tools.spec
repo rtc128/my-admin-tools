@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.4.13
+Version:			 1.4.14
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -82,6 +82,10 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Thu Mar 26 2026 Rodrigo Tassinari 1.4.14
+- my-mirror: create indexes using multithread
+- my-db-comapre: don't stop when a diff is found
 
 * Wed Mar 25 2026 Rodrigo Tassinari 1.4.13
 - my-mirror: In AWS mode, always create tables without indexes and constraints, and then create them after copying data.
