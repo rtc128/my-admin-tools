@@ -1864,7 +1864,7 @@ function usage()
 	echo "      If environment variable MY_MIRROR_TXN_LEN_FORCE_LIMIT is set, for tables partitioned by PK, each partition will have no more than <MY_MIRROR_TXN_LEN_FORCE_LIMIT> rows, even if average row length is very small."
 	echo "   -s: Use login path <login path> as source instance"
 	echo "       Required."
-	echo "   -n: Number of threads used in the following operations: table splitting (if transaction length limit [-l option ] is active); table data copy"
+	echo "   -n: Number of threads used in the following operations: table splitting (if transaction length limit [-l option ] is active); table data copy; index creation (after data copy)"
 	echo "       Min: 1. Max: 20. Default: 1."
 	echo "   -t: For tables, copy only triggers"
 	echo "   schema: Schema to be copied"
