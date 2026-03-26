@@ -11,7 +11,7 @@ function compare_rows()
 	local COUNT2=`mysql --login-path=$LPATH2 -N -e "$QUERY" $SCHEMA` || return 1
 	write_out "               $COUNT2"
 	if [ $COUNT1 -ne $COUNT2 ]; then
-		return 1
+		write_out "Difference found - row count"
 	fi
 }
 
@@ -20,16 +20,15 @@ function compare_struct()
 	write_out "         Comparing table structure"
 	local STRUCT1=`mktemp /tmp/my-db-compare.XXXXXX`
 	local STRUCT2=`mktemp /tmp/my-db-compare.XXXXXX`
-	local QUERY="desc $TABLE"
+	local QUERY="show create table \`$TABLE\`"
 	write_out "            $LPATH1"
 	mysql --login-path=$LPATH1 -N -e "$QUERY" $SCHEMA >$STRUCT1 || { rm $STRUCT1 $STRUCT 2; return 1; }
 	write_out "            $LPATH2"
 	mysql --login-path=$LPATH2 -N -e "$QUERY" $SCHEMA >$STRUCT2 || { rm $STRUCT1 $STRUCT 2; return 1; }
 	if ! diff $STRUCT1 $STRUCT2; then
-		write_out "Found a difference"
-		rm $STRUCT1 $STRUCT 2
-		return 1
+		write_out "Difference found - table structure"
 	fi
+	rm $STRUCT1 $STRUCT2
 }
 
 function usage()
@@ -42,11 +41,6 @@ function usage()
 
 function run()
 {
-	if [ $# -ne 2 ]; then
-		usage
-		return 1
-	fi
-
 	CMP_ROWS=0
 	CMP_ROWS=0
 
@@ -56,8 +50,18 @@ function run()
 				CMP_ROWS=1;;
 			s)
 				CMP_STRUCT=1;;
+			*)
+				echo "Unknown option '$OPT'" >&2
+				usage
+				return 1;;
 		esac
 	done
+	shift $((OPTIND-1))
+
+	if [ $# -ne 2 ]; then
+		usage
+		return 1
+	fi
 
 	LPATH1=$1
 	LPATH2=$2
@@ -84,8 +88,6 @@ function run()
 			fi
 		done
 	done
-
-	write_out "No diff found!"
 }
 
 function write_out()
