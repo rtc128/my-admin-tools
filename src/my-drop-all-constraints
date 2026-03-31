@@ -1,0 +1,214 @@
+#!/bin/bash
+
+if [ "$DEBUG" == "1" ]; then
+   set -x
+fi
+
+function confirm()
+{
+	if [ $ANSWER_YES -eq 1 ]; then
+		return 0
+	fi
+	local AUX="(ALL)"
+	if [ -n "$SCHEMA" ]; then
+		AUX="$SCHEMA"
+	fi
+	echo "Schema: $AUX"
+	AUX="(ALL)"
+	if [ -n "$TABLE" ]; then
+		AUX="$TABLE"
+	fi
+	echo "Table: $AUX"
+	echo -n "Are you sure you want to drop constraints (you must type 'yes')? "
+	read ANSWER
+	[ "$ANSWER" == "yes" ] || return 1
+}
+
+function drop_one()
+{
+	local CONSTRAINT="$1"
+	local QUERY="alter table \`$TABLE\` drop constraint \`$CONSTRAINT\`;"
+	QUERY="`echo \"$QUERY\" | sed -e 's/\t/\\t/g'`"
+	local SCRIPT=`mktemp /tmp/my-admin-tools.XXXXXX`
+
+	echo "set sql_mode='';" >$SCRIPT
+	echo -e "$QUERY" >>$SCRIPT
+	write_out "         $CONSTRAINT"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH "$SCHEMA" <$SCRIPT 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF $SCRIPT
+	if [ $RC -ne 0 ]; then
+		write_out "$QUERY"
+	fi
+	return $RC
+}
+
+function drop_schema_constraints()
+{
+	write_out "   $SCHEMA"
+	if [ -n "$TABLE" ]; then
+		drop_table_constraints || return 1
+		return 0
+	fi
+
+	local LIST_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+	list_tables $LIST_FILE || { rm $LIST_FILE; return 1; }
+	local AUX
+	while read -e AUX; do
+		TABLE="$AUX"
+		drop_table_constraints || { rm $LIST_FILE; return 1; }
+	done <$LIST_FILE
+	rm $LIST_FILE
+}
+
+function drop_table_constraints()
+{
+	write_out "      $TABLE"
+	local LIST_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+	list_constraints $LIST_FILE || { rm $LIST_FILE; return 1; }
+	if [ "$DEBUG" == "1" ]; then
+		cat $LIST_FILE >&2
+	fi
+	local CONSTRAINT
+	while read -e -r CONSTRAINT; do
+		CONSTRAINT="`echo $CONSTRAINT | sed -e 's/\\t/\t/g'`"
+		drop_one "$CONSTRAINT" || { rm $LIST_FILE; return 1; }
+	done <$LIST_FILE
+	rm $LIST_FILE
+}
+
+function list_constraints()
+{
+	local OUTPUT=$1
+
+	QUERY="select constraint_name from information_schema.table_constraints where constraint_type not in ('PRIMARY KEY', 'UNIQUE') and table_schema = '$SCHEMA' and table_name = '$TABLE' order by 1"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUTPUT 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || return 1
+	sed -i -z -e 's/\r\n/\n/g' $OUTPUT || return 1
+}
+
+function list_schemas()
+{
+	local OUTPUT=$1
+
+	QUERY="select schema_name from information_schema.schemata where schema_name not in ('sys', 'information_schema', 'performance_schema', 'mysql')"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUTPUT 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || return 1
+	sed -i -z -e 's/\r\n/\n/g' $OUTPUT || return 1
+}
+
+function list_tables()
+{
+	local OUTPUT=$1
+
+	QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUTPUT 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || return 1
+	sed -i -z -e 's/\r\n/\n/g' $OUTPUT || return 1
+}
+
+function run()
+{
+	LOGIN_PATH=client
+	ANSWER_YES=0
+	SCHEMA=
+	TABLE=
+	while getopts "hl:s:t:y" opt; do
+		case $opt in
+			h)
+				usage
+				return 0;;
+			l)
+				LOGIN_PATH=$OPTARG;;
+			s)
+				SCHEMA="$OPTARG";;
+			t)
+				TABLE="$OPTARG";;
+			y)
+				ANSWER_YES=1;;
+			*)
+				echo "Unknown option '$opt'" >&2
+				usage
+				return 1;;
+		esac
+	done
+	shift $((OPTIND-1))
+	if [ $# -ne 0 ]; then
+		usage
+		return 1
+	fi
+
+	#if table is defined, schema must be defined
+	if [ -n "$TABLE" -a -z "$SCHEMA" ]; then
+		echo "Table is defined (-t) but schema is not (-s)" >&2
+		return 1
+	fi
+
+	confirm || return 1
+	write_out "Dropping constraints"
+	if [ -n "$SCHEMA" ]; then
+		drop_schema_constraints || return 1
+		return 0
+	fi
+
+	local LIST_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+	list_schemas $LIST_FILE || { rm $LIST_FILE; return 1; }
+	local AUX
+	while read -e AUX; do
+		TABLE=
+		SCHEMA="$AUX"
+		drop_schema_constraints || { rm $LIST_FILE; return 1; }
+	done <$LIST_FILE
+	rm $LIST_FILE
+}
+
+function usage()
+{
+	echo "*** my-admin-tools ***"
+	echo "my-drop-all-constraints - Drop constraints in an instance"
+	echo "Usage: $0 [ -h ] [ -l <path> ] [ -s <schema> [ -t <table> ] ]"
+	echo "	 -h: display help and exit"
+	echo "	 -l: use login path <path>"
+	echo "			Default: client"
+	echo "	 -s: drop only constraints in schema <schema>"
+	echo "	 -t: drop only constraints in table <table> - must be used with -s"
+	echo "Credentials must be saved using 'mysql_config_editor'"
+}
+
+function write_file_out()
+{
+	local OUT_F="$1"
+	local SIZE=`stat -c %s "$OUT_F"`
+	if [ $SIZE -eq 0 ]; then
+		return 0
+	fi
+	local TS=`date +"%d %H:%M:%S"`
+	local MSG="[$TS]\n`cat \"$OUT_F\" | sed -e 's/^/\t/'`"
+	echo -e "$MSG"
+	return 0
+}
+
+function write_out()
+{
+	local MSG="$1"
+	local TS=`date +"%d %H:%M:%S"`
+	echo -e "[$TS] $MSG"
+}
+
+run $*
+RC=$?
+exit $RC

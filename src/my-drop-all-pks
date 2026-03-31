@@ -1,0 +1,238 @@
+#!/bin/bash
+
+function confirm()
+{
+	if [ $ANSWER_YES -eq 1 ]; then
+		return 0
+	fi
+	AUX="(ALL)"
+	if [ -n "$SCHEMA" ]; then
+		AUX="$SCHEMA"
+	fi
+	echo "Schema: $AUX"
+	AUX="(ALL)"
+	if [ -n "$TABLE" ]; then
+		AUX="$TABLE"
+	fi
+	echo "Table: $AUX"
+	echo -n "Are you sure you want to drop primary keys (you must type 'yes')? "
+	read ANSWER
+	[ "$ANSWER" == "yes" ] || return 1
+}
+
+function drop_one()
+{
+
+	local QUERY="alter table \`$TABLE\` drop primary key"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -e "$QUERY" "$SCHEMA" 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF $SCRIPT
+	if [ $RC -ne 0 ]; then
+		write_out "$QUERY"
+	fi
+	return $RC
+}
+
+function drop_schema_pks()
+{
+	write_out "   $SCHEMA"
+	if [ -n "$TABLE" ]; then
+		drop_table_pks || return 1
+		return 0
+	fi
+
+	local LIST_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+	list_tables $LIST_FILE || { rm $LIST_FILE; return 1; }
+	while read -e AUX; do
+		TABLE="$AUX"
+		drop_table_pk || { rm $LIST_FILE; return 1; }
+	done <$LIST_FILE
+	rm $LIST_FILE
+}
+
+function drop_table_pk()
+{
+	write_out "      $TABLE"
+	remove_ai || return 1
+	local QUERY="select count(1) from statistics where table_schema = '$SCHEMA' and table_name = '$TABLE' and index_name = 'PRIMARY'"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" information_schema >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	local COUNT=`cat $OUT_BUFF`
+	rm $OUT_BUFF
+	[ $COUNT -gt 0 ] || return 0
+	drop_one || return 1
+}
+
+function list_indexes()
+{
+	local OUTPUT=$1
+
+	QUERY="select index_name from information_schema.table_indexes where index_name != 'PRIMARY' and table_schema = '$SCHEMA' and table_name = '$TABLE' and seq_in_index = 1 order by 1"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUTPUT 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || return 1
+	sed -i -z -e 's/\r\n/\n/g' $OUTPUT || return 1
+}
+
+function list_schemas()
+{
+	local OUTPUT=$1
+
+	QUERY="select schema_name from information_schema.schemata where schema_name not in ('sys', 'information_schema', 'performance_schema', 'mysql')"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUTPUT 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || return 1
+	sed -i -z -e 's/\r\n/\n/g' $OUTPUT || return 1
+}
+
+function list_tables()
+{
+	local OUTPUT=$1
+
+	local QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$OUTPUT 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || return 1
+	sed -i -z -e 's/\r\n/\n/g' $OUTPUT || return 1
+}
+
+function remove_ai()
+{
+	local QUERY="show create table \`$TABLE\`"
+	local OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" "$SCHEMA" | awk -F '\t' '{print $2;}' >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+
+	sed -i -e 's/\r\n/\n/g' $OUT_BUFF || return 1
+	sed -i -e 's/\\n/\n/g' $OUT_BUFF || return 1
+	sed -i -e 's/\\t/\t/g' $OUT_BUFF || return 1
+
+	local COL_DEF="`grep -m 1 -w AUTO_INCREMENT $OUT_BUFF`"
+	rm $OUT_BUFF
+
+	[ -n "$COL_DEF" ] || return 0
+
+	local NEW_COL_DEF="`echo \"$COL_DEF\" | sed -e 's/ AUTO_INCREMENT//' -e 's/,$//' `"
+	local QUERY="alter table \`$TABLE\` modify $NEW_COL_DEF"
+	local SCRIPT=`mktemp /tmp/my-admin-tools.XXXXXX`
+	echo "$QUERY;" >$SCRIPT
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	mysql --login-path=$LOGIN_PATH "$SCHEMA" <$SCRIPT 2>$ERR_BUFF
+	local RC=$?
+	rm $SCRIPT
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	if [ $RC -ne 0 ]; then
+		write_out "$QUERY"
+	fi
+
+	return $RC
+}
+
+function run()
+{
+	LOGIN_PATH=client
+	ANSWER_YES=0
+	SCHEMA=
+	TABLE=
+	while getopts "hl:s:y" opt; do
+		case $opt in
+			l)
+				LOGIN_PATH=$OPTARG;;
+			s)
+				SCHEMA="$OPTARG";;
+			t)
+				TABLE="$OPTARG";;
+			y)
+				ANSWER_YES=1;;
+			*)
+				echo "Unknown option '$opt'" >&2
+				usage
+				return 1;;
+		esac
+	done
+	shift $((OPTIND-1))
+	if [ $# -ne 0 ]; then
+		usage
+		return 1
+	fi
+
+	#if table is defined, schema must be defined
+	if [ -n "$TABLE" -a -z "$SCHEMA" ]; then
+		echo "Table is defined (-t) but schema is not (-s)" >&2
+		return 1
+	fi
+
+	confirm || return 1
+	write_out "Dropping indexes"
+	if [ -n "$SCHEMA" ]; then
+		drop_schema_indexes || return 1
+		return 0
+	fi
+
+	local LIST_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+	list_schemas $LIST_FILE || { rm $LIST_FILE; return 1; }
+	while read -e AUX; do
+		TABLE=
+		SCHEMA="$AUX"
+		drop_schema_pks || { rm $LIST_FILE; return 1; }
+	done <$LIST_FILE
+	rm $LIST_FILE
+}
+
+function usage()
+{
+	echo "*** my-admin-tools ***"
+	echo "my-drop-all-pks - Drop primary keys in an instance"
+	echo "Usage: $0 [ -h ] [ -l <path> ] [ -s <schema> [ -t <table> ] ]"
+	echo "	 -h: display help and exit"
+	echo "	 -l: use login path <path>"
+	echo "			Default: client"
+	echo "	 -s: drop only indexes in schema <schema>"
+	echo "	 -t: drop only indexes in table <table> - must be used with -s"
+	echo "Credentials must be saved using 'mysql_config_editor'"
+}
+
+function write_file_out()
+{
+	local OUT_F="$1"
+	local SIZE=`stat -c %s "$OUT_F"`
+	if [ $SIZE -eq 0 ]; then
+		return 0
+	fi
+	local TS=`date +"%d %H:%M:%S"`
+	local MSG="[$TS]\n`cat \"$OUT_F\" | sed -e 's/^/\t/'`"
+	echo -e "$MSG"
+	return 0
+}
+
+function write_out()
+{
+	local MSG="$1"
+	local TS=`date +"%d %H:%M:%S"`
+	echo -e "[$TS] $MSG"
+}
+
+run $*
+RC=$?
+exit $RC
