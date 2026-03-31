@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.4.14
+Version:			 1.5.0
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -11,7 +11,10 @@ Source0:			 my-admin-tools.tar.gz
 Administration tools for MySQL:
 - Analyze all tables: my-analyze-all-tables
 - Compare databases: my-db-compare
+- Drop all constraints: my-drop-all-constraints
 - Drop all events: my-drop-all-events
+- Drop all indexes: my-drop-all-indexes
+- Drop all primary keys: my-drop-all-pks
 - Drop all routines: my-drop-all-routines
 - Drop all schemas: my-drop-all-schemas
 - Drop all tables: my-drop-all-tables
@@ -32,7 +35,10 @@ install -m 0755 src/my-analyze-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-count $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-data $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-db-compare $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-drop-all-constraints $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-events $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-drop-all-indexes $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-drop-all-pks $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-routines $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-schemas $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-tables $RPM_BUILD_ROOT/usr/bin
@@ -59,7 +65,10 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-compare-count
 /usr/bin/my-compare-data
 /usr/bin/my-db-compare
+/usr/bin/my-drop-all-constraints
 /usr/bin/my-drop-all-events
+/usr/bin/my-drop-all-indexes
+/usr/bin/my-drop-all-pks
 /usr/bin/my-drop-all-routines
 /usr/bin/my-drop-all-schemas
 /usr/bin/my-drop-all-tables
@@ -82,6 +91,11 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Mon Mar 31 2026 Rodrigo Tassinari 1.5.0
+- New tool: my-drop-all-constraints
+- New tool: my-drop-all-indexes
+- New tool: my-drop-all-pks
 
 * Thu Mar 26 2026 Rodrigo Tassinari 1.4.14
 - my-mirror: create indexes using multithread
