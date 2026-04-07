@@ -11,8 +11,8 @@ fi
 function copy_all_grants()
 {
 	local QUERY="select user, host from mysql.user where user != '' and user not like 'mysql.%' and concat(user, '@', host) != (select current_user()) and user not like 'AWS%' and user not like 'rds%'"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$SRC -N -e "$QUERY" >$OUT_BUFF || { rm $OUT_BUFF; return 1; }
 
 	while read -r LINE; do
@@ -27,10 +27,10 @@ function copy_all_grants()
 
 function create_events()
 {
-	local DST_OBJ_LIST=`mktemp /tmp/my-mirror.XXXXXX`
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local SRC_OBJ_LIST=`mktemp /tmp/my-mirror.XXXXXX`
-	local SQL_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local DST_OBJ_LIST="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local SRC_OBJ_LIST="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local SQL_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 
 	#list events in src
 	local QUERY="select event_name from information_schema.events where event_schema = '$SCHEMA' order by 1"
@@ -53,7 +53,7 @@ function create_events()
 		fi
 		local QUERY="show create event \`$OBJ\`"
 		write_out "      $OBJ"
-		local TMP=`mktemp /tmp/my-mirror.XXXXXX`
+		local TMP="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 		mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA 2>$ERR_BUFF | awk -F '\t' '{print $4;}' | sed -e 's/\\n/\n/g' -e 's/\\t/\t/g' >$TMP
 		local SIZE=`stat -c %s $ERR_BUFF`
 		write_file_out $ERR_BUFF
@@ -173,8 +173,8 @@ function copy_full_grants()
 {
 	write_out "Adding all privileges"
 	local QUERY="select user, host from mysql.user where user != '' and user not like 'mysql.%' and concat(user, '@', host) != (select current_user()) and user not like 'AWS%' and user not like 'rds%'"
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$SRC -N -e "$QUERY" >$OUT_BUFF 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
@@ -212,10 +212,10 @@ function create_all_routines()
 function create_routines()
 {
 	local OBJ_TYPE=$1
-	local DST_OBJ_LIST=`mktemp /tmp/my-mirror.XXXXXX`
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local SRC_OBJ_LIST=`mktemp /tmp/my-mirror.XXXXXX`
-	local SQL_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local DST_OBJ_LIST="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local SRC_OBJ_LIST="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local SQL_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 
 	#list in src
 	local QUERY="select routine_name from information_schema.routines where routine_type = '$OBJ_TYPE' and routine_schema = '$SCHEMA' order by 1"
@@ -239,7 +239,7 @@ function create_routines()
 		fi
 		local QUERY="show create $OBJ_TYPE $OBJ"
 		write_out "         $OBJ"
-		local TMP=`mktemp /tmp/my-mirror.XXXXXX`
+		local TMP="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 		mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA 2>$ERR_BUFF | awk -F '\t' '{print $3;}' | sed -e 's/\\n/\n/g' -e 's/\\t/\t/g' >$TMP
 		local SIZE=`stat -c %s $ERR_BUFF`
 		write_file_out $ERR_BUFF
@@ -262,10 +262,10 @@ function create_all_tables()
 	local SCHEMA 
 	write_out "Creating tables"
 
-	local DST_OBJ_LIST=`mktemp /tmp/my-mirror.XXXXXX`
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local TABLE_LIST=`mktemp /tmp/my-mirror.XXXXXX`
-	local SQL_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local DST_OBJ_LIST="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local TABLE_LIST="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local SQL_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	for SCHEMA in `cat $SCHEMA_LIST_FILE`; do
 		write_out "   $SCHEMA"
 		#list tables in dst
@@ -356,8 +356,8 @@ function copy_table_attachments()
 	write_out "      $TABLE"
 
 	local QUERY="show create table $TABLE"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
@@ -370,7 +370,7 @@ function copy_table_attachments()
 	grep -E -m 1 '^  KEY|^  UNIQUE|^  CONSTRAINT' $OUT_BUFF >/dev/null
 	[ $? -eq 0 ] || { rm $OUT_BUFF; return 0; }
 
-	local SQL_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local SQL_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	echo "set foreign_key_checks = off;" >$SQL_BUFF
 	echo "set sql_mode = no_auto_value_on_zero;" >>$SQL_BUFF
 	echo "alter table $TABLE add (" >>$SQL_BUFF
@@ -378,7 +378,7 @@ function copy_table_attachments()
 	rm $OUT_BUFF
 	echo ");" >>$SQL_BUFF
 
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$DST $SCHEMA <$SQL_BUFF 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
@@ -388,52 +388,14 @@ function copy_table_attachments()
 	return 0
 }
 
-function copy_table_constraints()
-{
-	write_out "      $TABLE"
-	local QUERY="show create table $TABLE"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
-	local RC=$?
-	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { $OUT_BUFF; return 1; }
-	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
-	sed -i -e 's/,$//' $OUT_BUFF
-	local DEF_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	grep -E '^  CONSTRAINT' $OUT_BUFF | sed -e 's/^  //' >$DEF_BUFF
-	rm $OUT_BUFF
-	local SIZE=`stat -c %s $DEF_BUFF`
-	if [ $SIZE -eq 0 ]; then
-		rm $DEF_BUFF
-		return 0
-	fi
-
-	sed -i -E -e "s/^(CONSTRAINT .*)/ALTER TABLE $TABLE ADD \1\;/" $DEF_BUFF
-
-	local PROC_RET_CODE=0
-	while read -e QUERY; do
-		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		mysql --login-path=$DST -e "set foreign_key_checks=off, sql_mode=''; $QUERY" "$SCHEMA" 2>$ERR_BUFF
-		local RC=$?
-		write_file_out $ERR_BUFF
-		rm $ERR_BUFF
-		[ $RC -eq 0 ] || { write_out "$QUERY"; PROC_RET_CODE=1; break; }
-	done <$DEF_BUFF
-
-	rm $DEF_BUFF
-	return $PROC_RET_CODE
-}
-
 function copy_table_pk()
 {
 	write_out "      $TABLE"
 
 	#check if table has PK in dst
 	local QUERY="show create table $TABLE"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$DST -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
@@ -448,8 +410,8 @@ function copy_table_pk()
 	[ $COUNT -eq 0 ] || return 0
 
 	local QUERY="show create table $TABLE"
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
@@ -464,7 +426,7 @@ function copy_table_pk()
 		return 0
 	fi
 	QUERY="set sql_mode = no_auto_value_on_zero; alter table $TABLE add $DEF"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$DST -N -e "$QUERY" $SCHEMA 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
@@ -474,23 +436,10 @@ function copy_table_pk()
 	return 0
 }
 
-function copy_all_indexes()
-{
-	write_out "Copying indexes"
-	local SCHEMA_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
-
-	list_schemas $SCHEMA_LIST_FILE || { rm $SCHEMA_LIST_FILE; return 1; }
-	local SCHEMA_LIST=`cat $SCHEMA_LIST_FILE`
-	rm $SCHEMA_LIST_FILE
-	for SCHEMA in $SCHEMA_LIST; do
-		copy_schema_indexes || return 1
-	done
-}
-
 function copy_all_attachments()
 {
 	write_out "Copying attachments (indexes and constraints)"
-	local SCHEMA_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	local SCHEMA_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 
 	list_schemas $SCHEMA_LIST_FILE || { rm $SCHEMA_LIST_FILE; return 1; }
 	local SCHEMA_LIST=`cat $SCHEMA_LIST_FILE`
@@ -503,7 +452,7 @@ function copy_all_attachments()
 function copy_all_indexes()
 {
 	write_out "Copying indexes"
-	local SCHEMA_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	local SCHEMA_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 
 	list_schemas $SCHEMA_LIST_FILE || { rm $SCHEMA_LIST_FILE; return 1; }
 	local SCHEMA_LIST=`cat $SCHEMA_LIST_FILE`
@@ -516,7 +465,7 @@ function copy_all_indexes()
 function copy_all_primary_keys()
 {
 	write_out "Copying primary keys"
-	local SCHEMA_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	local SCHEMA_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 
 	list_schemas $SCHEMA_LIST_FILE || { rm $SCHEMA_LIST_FILE; return 1; }
 	local SCHEMA_LIST=`cat $SCHEMA_LIST_FILE`
@@ -529,7 +478,7 @@ function copy_all_primary_keys()
 function copy_schema_attachments()
 {
 	write_out "   $SCHEMA"
-	TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	TABLE_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	list_tables_simple || { rm $TABLE_LIST_FILE; return 1; }
 	local TABLE_LIST=`cat $TABLE_LIST_FILE`
 	rm $TABLE_LIST_FILE
@@ -541,7 +490,7 @@ function copy_schema_attachments()
 function copy_schema_indexes()
 {
 	write_out "   $SCHEMA"
-	TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	TABLE_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	list_tables_simple || { rm $TABLE_LIST_FILE; return 1; }
 
 	: >>$LOCK_FILE
@@ -559,7 +508,7 @@ function copy_schema_indexes()
 function copy_schema_primary_keys()
 {
 	write_out "   $SCHEMA"
-	TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	TABLE_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	list_tables_simple || { rm $TABLE_LIST_FILE; return 1; }
 	local TABLE_LIST=`cat $TABLE_LIST_FILE`
 	rm $TABLE_LIST_FILE
@@ -571,7 +520,7 @@ function copy_schema_primary_keys()
 function copy_all_constraints()
 {
 	write_out "Copying constraints"
-	local SCHEMA_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	local SCHEMA_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 
 	list_schemas $SCHEMA_LIST_FILE || { rm $SCHEMA_LIST_FILE; return 1; }
 	local SCHEMA_LIST=`cat $SCHEMA_LIST_FILE`
@@ -584,13 +533,19 @@ function copy_all_constraints()
 function copy_schema_constraints()
 {
 	write_out "   $SCHEMA"
-	TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	TABLE_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	list_tables_simple || { rm $TABLE_LIST_FILE; return 1; }
-	local TABLE_LIST=`cat $TABLE_LIST_FILE`
-	rm $TABLE_LIST_FILE
-	for TABLE in $TABLE_LIST; do
-		copy_table_constraints || return 1
+
+	: >>$LOCK_FILE
+	local I
+	local LIST=`seq 1 $TH_COUNT`
+	for I in $LIST; do
+		th_copy_table_constraints &
 	done
+	wait
+	rm $LOCK_FILE $TABLE_LIST_FILE
+	local CANCEL=`cat $CANCEL_FILE`
+	return $CANCEL
 }
 
 function copy_tables()
@@ -652,7 +607,7 @@ function copy_roles()
 
 	write_out "Copying user roles"
 	local QUERY="select user from mysql.user where user != '' and authentication_string = ''"
-	local BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF || { rm $BUFF; return 1; }
 	local LIST=`cat $BUFF`
 	for R in $LIST; do
@@ -674,7 +629,7 @@ function copy_table_grants()
 			from information_schema.table_privileges tp
 					join information_schema.tables t on tp.table_schema = t.table_schema and tp.table_name = t.table_name
 			where t.table_type = 'BASE TABLE' and grantee not like '\'mysql.%'";
-	BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF || return 1
 	mysql --login-path=$DST <$BUFF || return 1
 	rm $BUFF
@@ -686,7 +641,7 @@ function copy_schema_grants()
 	QUERY="select concat('grant ', privilege_type, ' on ', table_schema, '.* to ', grantee, ';') as cmd
 			from information_schema.schema_privileges
 			where grantee not like '\'mysql.%' and replace(grantee, '\'', '') <> current_user()"
-	BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF || return 1
 	mysql --login-path=$DST <$BUFF || return 1
 	rm $BUFF
@@ -695,10 +650,10 @@ function copy_schema_grants()
 function copy_views()
 {
 	local PASSES=4
-	local DST_OBJ_LIST=`mktemp /tmp/my-mirror.XXXXXX`
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local SRC_OBJ_LIST=`mktemp /tmp/my-mirror.XXXXXX`
-	local SQL_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local DST_OBJ_LIST="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local SRC_OBJ_LIST="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local SQL_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 
 	#list views in src
 	local QUERY="select table_name from information_schema.views where table_schema = '$SCHEMA' order by 1"
@@ -728,7 +683,7 @@ function copy_views()
 			fi
 			local QUERY="show create view $OBJ"
 			write_out "      $OBJ"
-			local TMP=`mktemp /tmp/my-mirror.XXXXXX`
+			local TMP="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 			mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$TMP 2>$ERR_BUFF
 			local RC=$?
 			cut -f 2 $TMP >$SQL_BUFF
@@ -752,7 +707,7 @@ function copy_views()
 function copy_virtual_columns()
 {
 	write_out "Creating virtual columns"
-	local BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local QUERY="select table_schema, table_name, column_name from information_schema.columns where table_schema <> 'mysql' and extra = 'VIRTUAL GENERATED'"
 	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF
 	while read -r LINE; do
@@ -771,7 +726,7 @@ function create_all_schemas()
 	for SCHEMA in `cat $SCHEMA_LIST_FILE`; do
 		write_out "   $SCHEMA"
 		local QUERY="create schema if not exists $SCHEMA"
-		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX` || return 1
+		local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`" || return 1
 		mysql --login-path=$DST -e "$QUERY" 2>$ERR_BUFF 
 		RC=$?
 		write_file_out $ERR_BUFF
@@ -790,7 +745,7 @@ function drop_all_triggers()
 
 	TABLE=$1
 	QUERY="select trigger_name from information_schema.triggers where trigger_schema = '$SCHEMA' and event_object_table = '$TABLE'"
-	ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	TRIGGER_LIST=`mysql --login-path=$DST -N -e "$QUERY" 2>$ERR_BUFF`
 	RC=$?
 	write_file_out $ERR_BUFF
@@ -799,7 +754,7 @@ function drop_all_triggers()
 		return 1
 	fi
 
-	ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	for TRIGGER in $TRIGGER_LIST; do UTRIGGER=${TRIGGER^^}
 		QUERY="drop trigger $TRIGGER"
 		mysql --login-path=$DST -e "$QUERY" $SCHEMA 2>$ERR_BUFF
@@ -877,7 +832,7 @@ function list_schemas()
 {
 	local OUT_FILE="$1"
 	local QUERY="select schema_name from information_schema.schemata where schema_name not in ('mysql', 'information_schema', 'performance_schema', 'sys') order by 1"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	if [ -n "$OUT_FILE" ]; then
 		mysql --login-path=$SRC -N -e "$QUERY" >"$OUT_FILE" 2>$ERR_BUFF
 	else
@@ -894,8 +849,8 @@ function list_tables()
 {
 	write_out "   $SCHEMA"
 
-	TABLE_PRE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	TABLE_PRE_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local QUERY="select table_name, round(table_rows * 1.1, 0), avg_row_length from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
 	mysql --login-path=$SRC -N -e "$QUERY" 2>$ERR_BUFF | sed -e 's/\r//' >$TABLE_PRE_LIST_FILE
 	local SIZE=`stat -c %s $ERR_BUFF`
@@ -925,7 +880,7 @@ function list_tables()
 
 function list_tables_simple()
 {
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' order by 1"
 	mysql --login-path=$SRC -N -e "$QUERY" >$TABLE_LIST_FILE 2>$ERR_BUFF
 	local RC=$?
@@ -975,7 +930,7 @@ function list_views()
 {
 	SCHEMA=$1
 	QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'VIEW'"
-	BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF || { rm $BUFF; return 1; }
 	cat $BUFF
 	rm $BUFF
@@ -1154,7 +1109,7 @@ function run()
 	print_options || return 1
 	print_env
 
-	CANCEL_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+	CANCEL_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	echo 0 >$CANCEL_FILE || return 1
 
 	LIMIT_PARTITION_SIZE_BYTES=$((LIMIT_PARTITION_SIZE * 1024 * 1024 * 1024))
@@ -1189,7 +1144,7 @@ function run_local()
 	fi
 
 	if [ -n "$L_TABLE" ]; then
-		TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+		TABLE_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 		copy_one_table_or_list "$L_TABLE"
 		local RC=$?
 		rm $TABLE_LIST_FILE
@@ -1209,7 +1164,7 @@ function run_local()
 		if [ $ONLY_TRIGGERS -eq 1 ]; then
 			copy_triggers || return 1
 		else
-			TABLE_LIST_FILE=`mktemp /tmp/my-mirror.XXXXXX`
+			TABLE_LIST_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 			copy_tables
 			local RC=$?
 			rm $TABLE_LIST_FILE
@@ -1250,8 +1205,8 @@ function copy_one_table()
 	fi
 
 	RETRY_COUNT=0
-	EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	EXP_ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	IMP_ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local EXP_OPT="--login-path=$SRC --set-gtid-purged=off --hex-blob $L_DUMP_OPT --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --skip-lock-tables --skip-add-locks --skip-triggers"
 	mysqldump $EXP_OPT $SCHEMA $L_TABLE 2>$EXP_ERR_BUFF | mysql --login-path=$DST $SCHEMA 2>$IMP_ERR_BUFF
 	EXP_SIZE=`stat -c %s $EXP_ERR_BUFF`
@@ -1289,14 +1244,57 @@ function copy_one_table()
 	return $CANCEL
 }
 
+function copy_one_table_constraints()
+{
+	write_out "      Starting table '$TABLE'"
+	local QUERY="show create table \`$TABLE\`"
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { $OUT_BUFF; return 1; }
+	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
+	sed -i -e 's/,$//' $OUT_BUFF
+	local DEF_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	grep -E '^  CONSTRAINT' $OUT_BUFF | sed -e 's/^  //' >$DEF_BUFF
+	rm $OUT_BUFF
+	local SIZE=`stat -c %s $DEF_BUFF`
+	if [ $SIZE -eq 0 ]; then
+		rm $DEF_BUFF
+		return 0
+	fi
+
+	sed -i -E -e "s/^(CONSTRAINT .*)/ALTER TABLE $TABLE ADD \1\;/" $DEF_BUFF
+
+	local PROC_RET_CODE=0
+	while read -e QUERY; do
+		local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+		mysql --login-path=$DST -e "set foreign_key_checks=off, sql_mode=''; $QUERY" "$SCHEMA" 2>$ERR_BUFF
+		local RC=$?
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || { write_out "$QUERY"; PROC_RET_CODE=1; break; }
+	done <$DEF_BUFF
+
+	rm $DEF_BUFF
+	if [ $PROC_RET_CODE -eq 0 ]; then
+		write_out "      Finished table '$TABLE'"
+	else
+		echo 1 >$CANCEL_FILE
+	fi
+	return $PROC_RET_CODE
+}
+
 function copy_one_table_indexes()
 {
 	write_out "      Starting table '$TABLE'"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 
 	local QUERY="show create table \`$TABLE\`"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
@@ -1304,7 +1302,7 @@ function copy_one_table_indexes()
 	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
 	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
 	sed -i -e 's/,$//' $OUT_BUFF
-	local DEF_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local DEF_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	grep -E '^  KEY|^  UNIQUE KEY' $OUT_BUFF | sed -e 's/^  //' >$DEF_BUFF
 	rm $OUT_BUFF
 	local SIZE=`stat -c %s $DEF_BUFF`
@@ -1325,7 +1323,7 @@ function copy_one_table_indexes()
 
 	local PROC_RET_CODE=0
 	while read -e QUERY; do
-		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 		mysql --login-path=$DST -e "set sql_mode=''; $QUERY" "$SCHEMA" 2>$ERR_BUFF
 		local RC=$?
 		write_file_out $ERR_BUFF
@@ -1419,8 +1417,8 @@ function copy_one_table_interval()
 	fi
 
 	local RETRY_COUNT=1
-	local EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local EXP_ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local IMP_ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local IMP_OPT="--login-path=$DST"
 	mysqldump $EXP_OPT --where "$WHERE" $SCHEMA $TABLE 2>$EXP_ERR_BUFF | mysql $IMP_OPT $SCHEMA 2>$IMP_ERR_BUFF
 	write_file_out $EXP_ERR_BUFF
@@ -1442,8 +1440,8 @@ function copy_one_table_interval()
 		local TXT="   Table '$TABLE_WITH_INT': error - retrying in $RETRY_INTERVAL seconds (#$RETRY_COUNT/#$MAX_RETRY_COUNT)"
 		write_out "$TXT"
 		sleep $RETRY_INTERVAL
-		local EXP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		local IMP_ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		local EXP_ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+		local IMP_ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 		mysqldump $EXP_OPT --where "$WHERE" $SCHEMA $TABLE 2>$EXP_ERR_BUFF | mysql $IMP_OPT $SCHEMA 2>$IMP_ERR_BUFF
 		write_file_out $EXP_ERR_BUFF
 		write_file_out $IMP_ERR_BUFF
@@ -1465,8 +1463,8 @@ function copy_one_virtual_column()
 
 	#check if column already exists in dst
 	write_out "   $SCHEMA.$TABLE.$COLUMN"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 
 	local QUERY="desc $TABLE"
 	mysql --login-path=$DST -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
@@ -1478,7 +1476,7 @@ function copy_one_virtual_column()
 	rm $OUT_BUFF
 	[ $COUNT -eq 0 ] || return 0
 
-	local BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local QUERY="show create table $SCHEMA.$TABLE"
 	mysql --login-path=$SRC -N -e "$QUERY" | sed -e 's/\\n/\n/g' | grep -m 1 -w $COLUMN | sed -e 's/,$//' | sed -e 's/\\/\\\\/g' >$BUFF || return 1
 	local NEW_COL=`cat $BUFF`
@@ -1508,7 +1506,7 @@ function read_config()
 		LOG_DIR=/var/log/my-admin-tools/my-mirror
 	fi
 
-	WORK_DIR=`crudini --get $CONFIG_FILE main work_dir 2>/dev/null`
+	WORK_DIR="`crudini --get $CONFIG_FILE main work_dir 2>/dev/null`"
 	if [ -z "$WORK_DIR" ]; then
 		WORK_DIR=/var/lib/my-admin-tools/my-mirror
 	fi
@@ -1528,9 +1526,9 @@ function split_table()
 {
 	local TABLE="$1"
 	local ROWS=$2
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local DESC=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local DESC="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 
 	write_out "      Describing table '$TABLE'"
 	local QUERY="desc $TABLE"
@@ -1541,7 +1539,7 @@ function split_table()
 	[ $RC -eq 0 ] || { rm $DESC; return 1; }
 
 	write_out "      Checking if table '$TABLE' has a numeric single-column PK"
-	local PK_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local PK_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	grep -w PRI $DESC >$PK_BUFF
 	rm $DESC
 
@@ -1579,7 +1577,7 @@ function split_table_pk_local()
 {
 	local TABLE_NAME="$1"
 	local COL_NAME="$2"
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local PK_BUFF="$PART_LOCAL_DIR/$TABLE_NAME"
 	local PK
 	local PART_MIN_VAL
@@ -1641,8 +1639,8 @@ function split_table_pk_remote()
 	local COL_NAME="$2"
 
 	#get min
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local QUERY="select min($COL_NAME) from $TABLE_NAME"
 	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
 	local RC=$?
@@ -1654,8 +1652,8 @@ function split_table_pk_remote()
 	rm $OUT_BUFF
 
 	#get max
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local QUERY="select max($COL_NAME) from $TABLE_NAME"
 	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
 	local RC=$?
@@ -1667,8 +1665,8 @@ function split_table_pk_remote()
 
 	local CANCEL=`cat $CANCEL_FILE`
 	while [ $CANCEL -eq 0 ]; do
-		local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-		local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+		local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+		local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 		PERCENT=`echo "scale=0; ($PART_MIN_VAL - $MIN_VAL) * 100 / ($MAX_VAL - $MIN_VAL + 1)" | bc`
 		write_out "      Table '$TABLE_NAME': reading partition: >>$PART_MIN_VAL ($PERCENT%)"
 		local QUERY="select max($COL_NAME) from (select $COL_NAME from $TABLE_NAME where $COL_NAME between $PART_MIN_VAL and $MAX_VAL order by 1 limit $LIMIT_PARTITION_SIZE_ROWS) x"
@@ -1711,8 +1709,8 @@ function split_table_ts()
 
 	write_out "      Partitioning table '$TABLE_NAME' by timestamp ($COL_NAME)"
 	#get min
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local QUERY="select date_format(min($COL_NAME), '%Y-%m-%d %H:%i:%S') from $TABLE_NAME"
 	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
 	local RC=$?
@@ -1723,8 +1721,8 @@ function split_table_ts()
 	rm $OUT_BUFF
 
 	#get max
-	local ERR_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local QUERY="select date_format(max($COL_NAME), '%Y-%m-%d %H:%i:%S') from $TABLE_NAME"
 	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
 	local RC=$?
@@ -1786,6 +1784,22 @@ function table_exists()
 	L_QUERY="select count(1) from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE' and table_name = '$L_TABLE'"
 	L_COUNT=`mysql --login-path=$DST -N -e "$L_QUERY" $SCHEMA`
 	echo $L_COUNT
+}
+
+function th_copy_table_constraints()
+{
+	local CANCEL=`cat $CANCEL_FILE`
+	TABLE="`get_next_table`"
+	while [ -n "$TABLE" -a $CANCEL -eq 0 ]; do
+		if ! copy_one_table_constraints; then
+			echo 1 >$CANCEL_FILE
+			break
+		fi
+		#remove table from list
+		remove_line_from_file "#$TABLE" $TABLE_LIST_FILE
+		TABLE=`get_next_table`
+		local CANCEL=`cat $CANCEL_FILE`
+	done
 }
 
 function th_copy_table_data()
@@ -1864,7 +1878,7 @@ function usage()
 	echo "      If environment variable MY_MIRROR_TXN_LEN_FORCE_LIMIT is set, for tables partitioned by PK, each partition will have no more than <MY_MIRROR_TXN_LEN_FORCE_LIMIT> rows, even if average row length is very small."
 	echo "   -s: Use login path <login path> as source instance"
 	echo "       Required."
-	echo "   -n: Number of threads used in the following operations: table splitting (if transaction length limit [-l option ] is active); table data copy; index creation (after data copy)"
+	echo "   -n: Number of threads used in the following operations: table splitting (if transaction length limit [-l option ] is active); table data copy"
 	echo "       Min: 1. Max: 20. Default: 1."
 	echo "   -t: For tables, copy only triggers"
 	echo "   schema: Schema to be copied"
@@ -1976,7 +1990,7 @@ function handle_term()
 
 function users_role_exists()
 {
-	OUT_BUFF=`mktemp /tmp/my-mirror.XXXXXX`
+	OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local ROLE=$1
 	local QUERY="select count(1) from mysql.user where user = '$ROLE' and authentication_string = ''"
 	mysql --login-path=$DST -N -e "$QUERY" >$OUT_BUFF || { rm $OUT_BUFF; return 1; }
