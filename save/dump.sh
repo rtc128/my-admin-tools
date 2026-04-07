@@ -1,0 +1,2 @@
+#if partitioning is disabled, ignore PKs beside indexes and constraints
+mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE 2>$ERR_BUFF | sed -e 's/^  PRIMARY KEY.*$//' -e 's/^  KEY .*$//' -e 's/^  UNIQUE KEY .*$//' -e 's/^  CONSTRAINT .*//' -e '/^$/d' | sed -e 's/\(.*\) AUTO_INCREMENT\([, ].*\)/\1\2/' | sed -z -e 's/,\n)/\n)/g' >$SQL_BUFF 2>$ERR_BUFF
