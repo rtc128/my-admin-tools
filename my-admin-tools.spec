@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.0
+Version:			 1.5.1
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -91,6 +91,10 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Tue Apr 7 2026 Rodrigo Tassinari 1.5.1
+my-mirror: Use work dir for temp files, instead of /tmp.
+my-mirror: Create indexes and constraints using multi-thread.
 
 * Mon Mar 31 2026 Rodrigo Tassinari 1.5.0
 - New tool: my-drop-all-constraints
