@@ -1,0 +1,171 @@
+#!/bin/bash
+
+function analyze()
+{
+	if [ $TEST_MODE -eq 1 ]; then
+		write_out "Skipping ANALYZE because TEST mode is on"
+		return 0
+	fi
+
+	local ERR_BUFF=`mktemp /tmp/my-update-dirty-stats.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-update-dirty-stats.XXXXXX`
+	local QUERY="analyze table \`$TABLE\`"
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" "$SCHEMA" >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $OUT_BUFF
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF $OUT_BUFF
+	[ $RC -eq 0 ] || { write_out "$QUERY"; return 1; }
+}
+
+function mount_log_path()
+{
+	local DT=`date +%Y-%m-%d`
+	local LOG_DIR=/var/log/my-admin-tools/my-update-dirty-stats
+	if [ -f "$CONFIG_FILE" ]; then
+		local AUX="`crudini --get \"$CONFIG_FILE\" main log_dir 2>/dev/null`"
+		if [ -n "$AUX" ]; then
+			local LOG_DIR="$AUX"
+		fi
+	fi
+
+	mkdir -p "$LOG_DIR" || return 1
+	echo "$LOG_DIR/my-update-dirty-stats.log"
+}
+
+function print_options()
+{
+	write_out "Schema: $SCHEMA"
+	write_out "Table: $TABLE"
+
+	local AUX=off
+	if [ $FORCE -eq 1 ]; then
+		local AUX=on
+	fi
+	write_out "FORCE mode: $AUX"
+
+	local AUX=off
+	if [ $TEST_MODE -eq 1 ]; then
+		local AUX=on
+	fi
+	write_out "TEST mode: $AUX"
+}
+
+function run()
+{
+	CONFIG_FILE=/etc/my-admin-tools/my-update-dirty-stats.conf
+	LOGIN_PATH=client
+	FORCE=0
+	TEST_MODE=0
+
+	while getopts ":c:fhl:t" OPT; do
+		case $OPT in
+			c)
+				CONFIG_FILE="$OPTARG";;
+			f)
+				FORCE=1;;
+			l)
+				LOGIN_PATH=$OPTARG;;
+			h)
+				usage
+				return 0;;
+			t)
+				TEST_MODE=1;;
+		esac
+	done
+	shift $((OPTIND-1))
+	if [ $# -ne 2 ]; then
+		echo "Invalid command line" >&2
+		usage
+		return 1
+	fi
+
+	SCHEMA="$1"
+	TABLE="$2"
+
+	LOG_FILE="`mount_log_path`" || return 1
+	write_out "Log file: $LOG_FILE"
+	write_out "Starting"
+	print_options
+
+	if [ $FORCE -eq 1 ]; then
+		analyze
+		local RC=$?
+		return $RC
+	fi
+
+	local ERR_BUFF=`mktemp /tmp/my-update-dirty-stats.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-update-dirty-stats.XXXXXX`
+	local QUERY="select ts.num_rows, ts.modified_counter, ts.stats_initialized from innodb_tablestats ts join innodb_tables t on ts.table_id = t.table_id where t.name = '$SCHEMA/$TABLE'"
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" information_schema >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+
+	local NUM_ROWS=`cat $OUT_BUFF | awk '{print $1;}'`
+	local MOD_COUNT=`cat $OUT_BUFF | awk '{print $2;}'`
+	local STATUS=`cat $OUT_BUFF | awk '{print $3;}'`
+	rm $OUT_BUFF
+
+	write_out "Num rows: $NUM_ROWS"
+	write_out "Mod count: $MOD_COUNT"
+	write_out "Status: $STATUS"
+	local UP_STATUS=${STATUS^^}
+
+	if [ "$UP_STATUS" == "UNINITIALIZED" ]; then
+		analyze || return 1
+	fi
+
+	#if modified count is more than 10% of num rows, analyze
+	local PERCENT=$((NUM_ROWS/10))
+	if [ $PERCENT -lt $MOD_COUNT ]; then
+		analyze || return 1
+	fi
+
+}
+
+function usage()
+{
+	echo "my-admin-tools"
+	echo "my-update-table-stats - Update table statistics when they are too old"
+	echo "Usage:" 
+	echo "$0 [ -c <config file> ] [ -f ] [ -h ] [ -l <path> ] [ -t ] <schema> <table>"
+	echo "   -f: Enable FORCE mode. Update stats without checking modify count."
+	echo "   -h: Display this help and exit."
+	echo "   -l: Use login path <path>. Default: client. See mysql_config_editor."
+	echo "   -t: Enable TEST mode. Only show stats. Do not try to update them."
+}
+
+function write_out()
+{
+	MSG="$1"
+	TS=`date +"%d %H:%M:%S"`
+	echo -e "[$TS] $MSG"
+	if [ -n "$LOG_FILE" ]; then
+		echo -e "[$TS] $MSG" >>"$LOG_FILE"
+	fi
+}
+
+function write_file_out()
+{
+	local OUT_F="$1"
+	local SIZE=`stat -c %s "$OUT_F"`
+	if [ $SIZE -eq 0 ]; then
+		return 0
+	fi
+	local TS=`date +"%d %H:%M:%S"`
+	local MSG="[$TS]\n`cat \"$OUT_F\" | sed -e 's/^/\t/'`"
+	echo -e "$MSG"
+	if [ -n "$LOG_FILE" ]; then
+		echo -e "$MSG" >>"$LOG_FILE"
+	fi
+	return 0
+}
+
+if [ "$DEBUG" == "1" ]; then
+	set -xv
+fi
+run $*
+RC=$?
+exit $RC
