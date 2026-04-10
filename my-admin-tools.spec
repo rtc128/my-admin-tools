@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.1
+Version:			 1.5.2
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -31,6 +31,7 @@ Administration tools for MySQL:
 %build
 %install
 install -d -m 0755 $RPM_BUILD_ROOT/usr/bin
+install -m 0755 -d $RPM_BUILD_ROOT/usr/share/man/man1
 install -m 0755 src/my-analyze-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-count $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-data $RPM_BUILD_ROOT/usr/bin
@@ -58,9 +59,14 @@ install -m 0755 src/my-repl-skip-failed-transaction $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-replace-table $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-truncate-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-unlock-users $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-update-dirty-stats $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
+install -m 0644 my-kill-blockers.1.gz $RPM_BUILD_ROOT/usr/share/man/man1
+install -m 0644 my-mirror.1.gz $RPM_BUILD_ROOT/usr/share/man/man1
 
 %files
+/usr/share/man/man1/my-kill-blockers.1.gz
+/usr/share/man/man1/my-mirror.1.gz
 /usr/bin/my-analyze-all-tables
 /usr/bin/my-compare-count
 /usr/bin/my-compare-data
@@ -88,15 +94,20 @@ install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 /usr/bin/my-replace-table
 /usr/bin/my-truncate-all-tables
 /usr/bin/my-unlock-users
+/usr/bin/my-update-dirty-stats
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Fri Apr 10 2026 Rodrigo Tassinari 1.5.2
+- my-kill-blockers: Added support for AWS RDS.
+- New tool: my-update-dirty-stats
 
 * Tue Apr 7 2026 Rodrigo Tassinari 1.5.1
 my-mirror: Use work dir for temp files, instead of /tmp.
 my-mirror: Create indexes and constraints using multi-thread.
 
-* Mon Mar 31 2026 Rodrigo Tassinari 1.5.0
+* Tue Mar 31 2026 Rodrigo Tassinari 1.5.0
 - New tool: my-drop-all-constraints
 - New tool: my-drop-all-indexes
 - New tool: my-drop-all-pks
