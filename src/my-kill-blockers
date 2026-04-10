@@ -24,34 +24,41 @@ function kill_row_blockers()
 			not exists (select 1 from sys.innodb_lock_waits w2 where w2.waiting_pid = w1.blocking_pid)
 		order by
 			w1.blocking_pid"
-	OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
 	mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -N -e "$QUERY" >$OUT_BUFF 2>$ERR_BUFF
-	RC=$?
+	local RC=$?
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
 	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
-	SIZE=`stat -c %s $OUT_BUFF`
+	local SIZE=`stat -c %s $OUT_BUFF`
 	if [ $SIZE -eq 0 ]; then
 		rm $OUT_BUFF
 		return 0
 	fi
 	local CUR_PID=0
 	while read -r LINE; do
-		PID=`echo $LINE | awk '{print $1;}'`
+		local PID=`echo $LINE | awk '{print $1;}'`
 		if [ $PID -eq $CUR_PID ]; then
 			continue
 		fi
-		CUR_PID=$PID
+		local CUR_PID=$PID
 
-		USER=`echo $LINE | awk '{print $2;}'`
-		HOST=`echo $LINE | awk '{print $3;}'`
-		TABLE_NAME=`echo $LINE | awk '{print $4;}'`
+		local USER=`echo $LINE | awk '{print $2;}'`
+		local HOST=`echo $LINE | awk '{print $3;}'`
+		local TABLE_NAME=`echo $LINE | awk '{print $4;}'`
 
 		write_out "PID: $PID, User: $USER, Host: $HOST, Table: $TABLE_NAME [ROW LOCK]"
 
-		CMD="kill connection $PID"
-		mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -e "$CMD" >/dev/null 2>&1
+		ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+		local CMD="kill connection $PID"
+		if [ $AWS_MODE -eq ]; then
+			CMD="call mysql.rds_kill($PID)"
+		fi
+
+		mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -e "$CMD" 2>$ERR_BUFF
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
 	done <$OUT_BUFF
 	rm $OUT_BUFF
 }
@@ -76,10 +83,10 @@ function kill_metadata_blockers()
 			not exists (select 1 from sys.schema_table_lock_waits w2 where w2.waiting_pid = w1.blocking_pid)
 		order by
 			w1.blocking_pid"
-	OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
-	ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
 	mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -N -e "$QUERY" >$OUT_BUFF 2>$ERR_BUFF
-	RC=$?
+	local RC=$?
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF
 	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
@@ -90,20 +97,24 @@ function kill_metadata_blockers()
 	fi
 	local CUR_PID=0
 	while read -r LINE; do
-		PID=`echo $LINE | awk '{print $1;}'`
+		local PID=`echo $LINE | awk '{print $1;}'`
 		if [ $PID -eq $CUR_PID ]; then
 			continue
 		fi
-		CUR_PID=$PID
+		local CUR_PID=$PID
 
-		USER=`echo $LINE | awk '{print $2;}'`
-		HOST=`echo $LINE | awk '{print $3;}'`
-		TABLE_NAME=`echo $LINE | awk '{print $4;}'`
-
+		local USER=`echo $LINE | awk '{print $2;}'`
+		local HOST=`echo $LINE | awk '{print $3;}'`
+		local TABLE_NAME=`echo $LINE | awk '{print $4;}'`
 		write_out "PID: $PID, User: $USER, Host: $HOST, Object: $TABLE_NAME [SCHEMA TABLE LOCK]"
-
-		CMD="kill connection $PID"
-		mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -e "$CMD" >/dev/null 2>&1
+		ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+		local CMD="kill connection $PID"
+		if [ $AWS_MODE -eq ]; then
+			local CMD="call mysql.rds_kill($PID)"
+		fi
+		mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -e "$CMD" 2>$ERR_BUFF
+		write_file_out $ERR_BUFF
+		rm $ERR_BUFF
 	done <$OUT_BUFF
 	rm $OUT_BUFF
 }
@@ -111,6 +122,7 @@ function kill_metadata_blockers()
 function run()
 {
 	ALL_USERS=0
+	AWS_MODE=0
 	WORKING_DIR=/var/lib/my-admin-tools/my-kill-blockers
 	EXEC_COUNT=1
 	INTERVAL=60
@@ -122,8 +134,10 @@ function run()
 	ROW=1
 	VERBOSE=0
 
-	while getopts ":ahi:l:mn:rs:v" OPT; do
+	while getopts ":Aahi:l:mn:rs:v" OPT; do
 		case $OPT in
+			A)
+				AWS_MODE=1;;
 			a)
 				ALL_USERS=1;;
 			h)
@@ -164,13 +178,17 @@ function run()
 
 	validate_params || return 1
 
-	LOG_DIR=/var/log/my-kill-blockers
+	LOG_DIR=/var/log/my-admin-tools/my-kill-blockers
 	mkdir -p $LOG_DIR || return 1
 	LOG_FILE=$LOG_DIR/$LOGIN_PATH.log
 
 	mkdir -p "$WORKING_DIR" || return 1
 	LOCK_FILE_BASENAME=.$LOGIN_PATH.lock
-	LOCK_FILE=${WORKING_DIR}/$LOCK_FILE_BASENAME
+
+	#first, if asked, kill metadata blockers, only once
+	[ $METADATA -ne 1 ] || kill_metadata_blockers
+
+	[ $ROW -eq 1 ] || return 0
 
 	local NOW=`date +%s`
 	local LIMIT_TIME=$((NOW+EXEC_COUNT*INTERVAL))
@@ -182,13 +200,6 @@ function run()
 		fi
 
 		[ $I -eq 1 ] || sleep $INTERVAL
-		#consider stale lock file if it is more than 2min old
-		find $WORKING_DIR -name $LOCK_FILE_BASENAME -type f -cmin 2 -exec rm {} \;
-		if [ -f "$LOCK_FILE" ]; then
-			write_out "Lock file exists - do you have another instance running?"
-			continue
-		fi
-		touch "$LOCK_FILE" || return 1
 
 		#if filtered for session count, check locks only if session count is beyond limit
 		if [ $MIN_SESSIONS -gt 0 ]; then
@@ -197,20 +208,14 @@ function run()
 			write_file_out $ERR_BUFF
 			rm $ERR_BUFF
 			if [ -z "$COUNT" ]; then
-				rm -f "$LOCK_FILE"
 				continue
 			fi
 			if [ $COUNT -lt $MIN_SESSIONS ]; then
-				rm "$LOCK_FILE"
 				continue
 			fi
 		fi
-		write_out "Checking locks"
-		[ $ROW -ne 1 ] || kill_row_blockers || { rm -f "$LOCK_FILE"; return 1; }
-		[ $METADATA -ne 1 ] || kill_metadata_blockers || { rm -f "$LOCK_FILE"; return 1; }
-		write_out "Finished"
-		rm "$LOCK_FILE"
 
+		kill_row_blockers || return 1
 	done
 }
 
@@ -257,7 +262,8 @@ function usage()
 	if [ -n "$ERR" ]; then
 		echo "Error: $ERR" >&2
 	fi
-	echo "Usage: $0 [ -a ] [ -h ] [ -i <interval> ] [ -l <login path> ] [ -m ] [ -n <count> ] [ -s <count> [ -v ] <time>"
+	echo "Usage: $0 [ -A ] [ -a ] [ -h ] [ -i <interval> ] [ -l <login path> ] [ -m ] [ -n <count> ] [ -s <count> [ -v ] <time>"
+	echo "   -A: Use commands that are compatible with AWS RDS and uncompatible with official MySQL"
 	echo "   -a: Do not ignore blocking sessions opened by root"
 	echo "   -h: Show this help"
 	echo "   -i: Set the interval between executions to <interval> seconds."
@@ -281,18 +287,20 @@ function usage()
 
 function write_file_out()
 {
-	local F="$1"
-	SIZE=`stat -c %s "$F"`
-	[ $SIZE -ne 0 ] || return 0
-	local CUR_TIMESTAMP=`date +%Y-%m-%d_%T`
-	if [ $VERBOSE -eq 1 ]; then
-		echo "[$CUR_TIMESTAMP $$]"
+	local OUT_F="$1"
+	local SIZE=`stat -c %s "$OUT_F"`
+	if [ $SIZE -eq 0 ]; then
+		return 0
 	fi
-	echo "[$CUR_TIMESTAMP $$]" >>$LOG_FILE
+	local TS=`date +%Y-%m-%d_%T`
+	local MSG="[$TS]\n`cat \"$OUT_F\" | sed -e 's/^/\t/'`"
 	if [ $VERBOSE -eq 1 ]; then
-		cat "$F"
+		echo -e "$MSG"
 	fi
-	cat "$F" >>$LOG_FILE
+	if [ -n "$LOG_FILE" ]; then
+		echo -e "$MSG" >>"$LOG_FILE"
+	fi
+	return 0
 }
 
 function write_out()
