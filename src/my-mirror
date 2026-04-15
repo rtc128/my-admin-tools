@@ -77,7 +77,7 @@ function copy_aws()
 	SCHEMA_LIST_FILE="$DST_WORK_DIR/.schemas"
 	VALID_PENDING_STRUCT_FILE="$DST_WORK_DIR/.valid_struct"
 	if [ $FINISH_MODE -eq 0 ]; then
-		if [ -f "$VALID_PENDING_STRUCT_FILE" ]; then
+		if [ -f "$VALID_PENDING_STRUCT_FILE" -a $FORCE_RESTART_COPY -eq 0 ]; then
 			echo -n "Data copy from a previous session can be resumed. Do you wish to resume it ('Y' or 'y' / 'N' or 'n' / CTRL+C to abort)? "
 			local ANSWER
 			read ANSWER
@@ -86,6 +86,7 @@ function copy_aws()
 			if [ "$U_ANSWER" == "Y" ]; then
 				RESUME=1
 				write_out "Resuming data copy"
+				LIMIT_PARTITION_SIZE=`crudini --get "$COPY_CONFIG_FILE" main limit_partition_size 2>/dev/null`
 				HANDLED_ANSWER=1
 			fi
 			if [ "$U_ANSWER" == "N" ]; then
@@ -110,7 +111,7 @@ function copy_aws()
 		CREATE_TABLES=0
 		ONLY_TABLE_STRUCTURE=0
 		copy_all_table_data || return 1
-		rm -f "$VALID_PENDING_STRUCT_FILE"
+		rm -f "$VALID_PENDING_STRUCT_FILE" "$COPY_CONFIG_FILE"
 		copy_aws_finish || return 1
 		rm -fr "$DST_WORK_DIR/schemas"
 	fi
@@ -121,10 +122,13 @@ function copy_aws()
 
 function copy_aws_startup()
 {
-	if [ $# -ne 0 ]; then
-		usage
-		return 1
-	fi
+	#save information about copy config
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	crudini --set "$COPY_CONFIG_FILE" main limit_partition_size $LIMIT_PARTITION_SIZE >$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || return 1
 
 	CREATE_TABLES=0
 	RC=$?
@@ -287,7 +291,7 @@ function create_all_tables()
 				continue
 			fi
 			write_out "      $TABLE"
-			mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE 2>$ERR_BUFF | sed -e 's/^  KEY .*$//' -e 's/^  UNIQUE KEY .*$//' -e 's/^  CONSTRAINT .*//' -e '/^$/d' | sed -z -e 's/,\n)/\n)/g' >$SQL_BUFF 2>$ERR_BUFF
+			mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE 2>$ERR_BUFF | sed -e 's/^  KEY .*$//' -e 's/^  CONSTRAINT .*//' -e '/^$/d' | sed -z -e 's/,\n)/\n)/g' >$SQL_BUFF 2>$ERR_BUFF
 			local RC=$?
 			write_file_out $ERR_BUFF
 			[ $RC -eq 0 ] || { rm $DST_OBJ_LIST $ERR_BUFF $TABLE_LIST $SQL_BUFF; return 1; }
@@ -367,14 +371,14 @@ function copy_table_attachments()
 	sed -i -e 's/\t//g' $OUT_BUFF
 
 	#check if there is at least one
-	grep -E -m 1 '^  KEY|^  UNIQUE|^  CONSTRAINT' $OUT_BUFF >/dev/null
+	grep -E -m 1 '^  KEY|^  CONSTRAINT' $OUT_BUFF >/dev/null
 	[ $? -eq 0 ] || { rm $OUT_BUFF; return 0; }
 
 	local SQL_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	echo "set foreign_key_checks = off;" >$SQL_BUFF
 	echo "set sql_mode = no_auto_value_on_zero;" >>$SQL_BUFF
 	echo "alter table $TABLE add (" >>$SQL_BUFF
-	grep -E '^  KEY|^  UNIQUE|^  CONSTRAINT' $OUT_BUFF >>$SQL_BUFF
+	grep -E '^  KEY|^  CONSTRAINT' $OUT_BUFF >>$SQL_BUFF
 	rm $OUT_BUFF
 	echo ");" >>$SQL_BUFF
 
@@ -998,9 +1002,18 @@ function print_options()
 	if [ $ONLY_TABLE_STRUCTURE -eq 1 ]; then
 		write_out "Only table structure: enabled"
 	fi
-	if [ $LIMIT_PARTITION_SIZE -gt 0 ]; then
-		write_out "Partition size: ${LIMIT_PARTITION_SIZE}G"
+
+	if [ $LIMIT_PARTITION_SIZE_BYTES -gt 0 ]; then
+		local AUX=$LIMIT_PARTITION_SIZE
+		local DEFAULT_UNIT=G
+		local LAST_CHAR="${VALUE: -1}"
+		local REGEX='^[0-9]$'
+		if [[ $LAST_CHAR =~ $REGEX ]] ; then
+			AUX=${AUX}${DEFAULT_UNIT}
+		fi
+		write_out "Limit partition size: ${AUX}"
 	fi
+
 	if [ -n "$PART_LOCAL_DIR" ]; then
 		write_out "Local partitiong buffer directory: ${PART_LOCAL_DIR}"
 	fi
@@ -1030,10 +1043,11 @@ function run()
 	AWS_SKIP_TO_DATA=0
 	PART_LOCAL_DIR=
 	RESUME=0
+	FORCE_RESTART_COPY=0
 
 	local opt
 
-	while getopts "ADEFGRSTVab:c:d:hi:kl:n:s:tU" opt; do
+	while getopts "ADEFGRSTVab:c:d:hi:kl:n:rs:tU" opt; do
 		case $opt in
 			A)
 				AWS=1;;
@@ -1075,6 +1089,8 @@ function run()
 				CREATE_TABLES=0;;
 			n)
 				TH_COUNT=$OPTARG;;
+			r)
+				FORCE_RESTART_COPY=1;;
 			s)
 				SRC=$OPTARG;;
 			t)
@@ -1106,13 +1122,15 @@ function run()
 	local TMP_LOG_FILE="`mount_log_path`" || return 1
 	write_out "Log file: $TMP_LOG_FILE"
 	LOG_FILE="$TMP_LOG_FILE"
+	convert_bytes $LIMIT_PARTITION_SIZE g || { write_out "Invalid partition limit"; return 1; }
+	LIMIT_PARTITION_SIZE_BYTES=$RESULT
+
 	print_options || return 1
 	print_env
 
 	CANCEL_FILE="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	echo 0 >$CANCEL_FILE || return 1
 
-	LIMIT_PARTITION_SIZE_BYTES=$((LIMIT_PARTITION_SIZE * 1024 * 1024 * 1024))
 	if [ $AWS -eq 1 ]; then
 		copy_aws $*
 	else
@@ -1177,6 +1195,34 @@ function run_local()
 	if [ $COPY_VIEWS -eq 1 ]; then
 		copy_views $SCHEMA || return 1
 	fi
+}
+
+function convert_bytes()
+{
+	local VALUE=$1
+	local DEFAULT_UNIT=$2
+
+	local LAST_CHAR="${VALUE: -1}"
+	local REGEX='^[0-9]$'
+	if [[ $LAST_CHAR =~ $REGEX ]] ; then
+		VALUE=${VALUE}${DEFAULT_UNIT}
+	fi
+	local LAST_CHAR="${VALUE: -1}"
+	local LAST_CHAR_LOWER="${LAST_CHAR,,}"
+	VALUE="${VALUE:0:-1}"
+
+	case $LAST_CHAR_LOWER in
+		k)
+			local MULT=1024;;
+		m)
+			local MULT=$((1024*1024));;
+		g)
+			local MULT=$((1024*1024*1025));;
+		*)
+			write_out "Invalid unit '$LAST_CHAR'"
+			return 1
+	esac
+	RESULT=`echo $VALUE \* $MULT | bc`
 }
 
 function copy_one_table()
@@ -1303,7 +1349,7 @@ function copy_one_table_indexes()
 	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
 	sed -i -e 's/,$//' $OUT_BUFF
 	local DEF_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
-	grep -E '^  KEY|^  UNIQUE KEY' $OUT_BUFF | sed -e 's/^  //' >$DEF_BUFF
+	grep -E '^  KEY' $OUT_BUFF | sed -e 's/^  //' >$DEF_BUFF
 	rm $OUT_BUFF
 	local SIZE=`stat -c %s $DEF_BUFF`
 	if [ $SIZE -eq 0 ]; then
@@ -1315,7 +1361,7 @@ function copy_one_table_indexes()
 		echo "Definition buffer before replacing:" >&2
 		cat $DEF_BUFF >&2
 	fi
-	sed -i -E -e "s/^(KEY .*|UNIQUE KEY .*)/ALTER TABLE \`$TABLE\` ADD \1\;/" $DEF_BUFF
+	sed -i -E -e "s/^(KEY .*)/ALTER TABLE \`$TABLE\` ADD \1\;/" $DEF_BUFF
 	if [ "$DEBUG" == "1" ]; then
 		echo "Definition buffer after replacing:" >&2
 		cat $DEF_BUFF >&2
@@ -1853,7 +1899,7 @@ function th_copy_table_indexes()
 function usage()
 {
 	echo "Usage:" 
-	echo "$0 [ -A ] [ -E ] [ -R ] [ -S ] [ -T ] [ -U ] [ -V ] [ -a ] [ -b <dir> ] [ -c <file> ] [ -d <login path> ] [ -h ] [ -i <file> ] [ -k ] [ -l <size> ] -s <login path> [ -n <threads> ] [ -t ] [ <schema> [ <table> | @<table list file>] ]"
+	echo "$0 [ -A ] [ -E ] [ -R ] [ -S ] [ -T ] [ -U ] [ -V ] [ -a ] [ -b <dir> ] [ -c <file> ] [ -d <login path> ] [ -h ] [ -i <file> ] [ -k ] [ -l <size> ] [ -r ] -s <login path> [ -n <threads> ] [ -t ] [ <schema> [ <table> | @<table list file>] ]"
 	echo "   -A: Activate AWS Mode. See below."
 	echo "   -E: Copy events"
 	echo "   -G: Copy grants"
@@ -1872,10 +1918,11 @@ function usage()
 	echo "   -h: Display help and exit"
 	echo "   -i: Ignore tables listed in <file>"
 	echo "   -k: Keep table structure: if destination table already exists, dont't recreate it, just copy new records."
-	echo "   -l: Split tables using max partition size = <size>."
-	echo "		<size>: max partition size (Gb) - must be between 1 and 99"
-	echo "		Size is calculated from table statistics (average row length)."
+	echo "   -l: Split tables, limiting each partition size to <size>."
+	echo "	   Size can be followed by a unit (Kb, Mb, or Gb). Examples: 500k, 500m, 500g. When unit is supressed, Gb is used."
+	echo "		Partition size is calculated from table statistics (average row length)."
 	echo "      If environment variable MY_MIRROR_TXN_LEN_FORCE_LIMIT is set, for tables partitioned by PK, each partition will have no more than <MY_MIRROR_TXN_LEN_FORCE_LIMIT> rows, even if average row length is very small."
+	echo "   -r: When in AWS mode, restart copy even if it can be resumed from a previous execution"
 	echo "   -s: Use login path <login path> as source instance"
 	echo "       Required."
 	echo "   -n: Number of threads used in the following operations: table splitting (if transaction length limit [-l option ] is active); table data copy"
@@ -1896,15 +1943,6 @@ function validate_options()
 {
 	[ -n "$SRC" ] || { echo "Option 's' is required"; usage; return 1; }
 	[ -n "$DST" ] || { echo "Option 'd' is required"; usage; return 1; }
-
-	if [ -n "$LIMIT_PARTITION_SIZE" ]; then
-		#partition size limit
-		if [ $LIMIT_PARTITION_SIZE -lt 0 -o $LIMIT_PARTITION_SIZE -gt 99 ]; then
-			write_out "Invalid value for partition size limit"
-			usage
-			return 1
-		fi
-	fi
 
 	#partitioning local dir must exist
 	if [ -n "$PART_LOCAL_DIR" ]; then
