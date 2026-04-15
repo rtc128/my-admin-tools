@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.2
+Version:			 1.5.3
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -98,6 +98,9 @@ install -m 0644 my-mirror.1.gz $RPM_BUILD_ROOT/usr/share/man/man1
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Wed Apr 15 2026 Rodrigo Tassinari 1.5.3
+- my-mirror: Allow unit definitions in partition size limit
 
 * Fri Apr 10 2026 Rodrigo Tassinari 1.5.2
 - my-kill-blockers: Added support for AWS RDS.
