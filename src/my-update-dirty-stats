@@ -29,6 +29,7 @@ function mount_log_path()
 		fi
 	fi
 
+	LOG_DIR="$LOG_DIR/$LOGIN_PATH"
 	mkdir -p "$LOG_DIR" || return 1
 	echo "$LOG_DIR/my-update-dirty-stats.log"
 }
@@ -83,8 +84,9 @@ function run()
 	SCHEMA="$1"
 	TABLE="$2"
 
-	LOG_FILE="`mount_log_path`" || return 1
-	write_out "Log file: $LOG_FILE"
+	local TMP_LOG_FILE="`mount_log_path`" || return 1
+	write_out "Log file: $TMP_LOG_FILE"
+	LOG_FILE="$TMP_LOG_FILE"
 	write_out "Starting"
 	print_options
 
@@ -136,6 +138,8 @@ function usage()
 	echo "   -h: Display this help and exit."
 	echo "   -l: Use login path <path>. Default: client. See mysql_config_editor."
 	echo "   -t: Enable TEST mode. Only show stats. Do not try to update them."
+	echo "See:"
+	echo "   man: my-update-dirty-stats.conf"
 }
 
 function write_out()
