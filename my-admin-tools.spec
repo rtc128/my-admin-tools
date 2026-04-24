@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.3
+Version:			 1.5.4
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -32,6 +32,7 @@ Administration tools for MySQL:
 %install
 install -d -m 0755 $RPM_BUILD_ROOT/usr/bin
 install -m 0755 -d $RPM_BUILD_ROOT/usr/share/man/man1
+install -m 0755 -d $RPM_BUILD_ROOT/usr/share/man/man8
 install -m 0755 src/my-analyze-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-count $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-data $RPM_BUILD_ROOT/usr/bin
@@ -63,10 +64,12 @@ install -m 0755 src/my-update-dirty-stats $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 install -m 0644 my-kill-blockers.1.gz $RPM_BUILD_ROOT/usr/share/man/man1
 install -m 0644 my-mirror.1.gz $RPM_BUILD_ROOT/usr/share/man/man1
+install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/man8
 
 %files
 /usr/share/man/man1/my-kill-blockers.1.gz
 /usr/share/man/man1/my-mirror.1.gz
+/usr/share/man/man8/my-update-dirty-stats.conf.8.gz
 /usr/bin/my-analyze-all-tables
 /usr/bin/my-compare-count
 /usr/bin/my-compare-data
@@ -98,6 +101,10 @@ install -m 0644 my-mirror.1.gz $RPM_BUILD_ROOT/usr/share/man/man1
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Fri Apr 24 2026 Rodrigo Tassinari 1.5.4
+- my-update-dirty-stats: Save log in a subdirectory with login path name
+- my-update-dirty-stats: Added man page for config file
 
 * Wed Apr 15 2026 Rodrigo Tassinari 1.5.3
 - my-mirror: Allow unit definitions in partition size limit
