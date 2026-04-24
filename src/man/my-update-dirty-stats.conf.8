@@ -1,0 +1,23 @@
+.\" Manpage for my-update-dirty-stats.
+
+.TH man 8 "my-update-dirty-stats.conf man page"
+
+.SH NAME
+
+my-update-dirty-stats.conf \- my-update-dirty-stats configuration
+
+.SH VARIABLES
+
+==> Section "main"
+
+log_dir: Directory where log file will be written. A subdirectory with login path is used in the defined directory.
+Default: /var/log/my-admin-tools/my-update-dirty-stats
+
+.SH EXAMPLE
+
+[main]
+
+log_dir=/root/log/dirty-stats-update
+
+.SH AUTHOR
+Rodrigo Cardoso <rodrigocardoso@tjrs.jus.br>
