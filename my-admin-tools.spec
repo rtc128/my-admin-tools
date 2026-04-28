@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.4
+Version:			 1.5.5
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -64,11 +64,13 @@ install -m 0755 src/my-update-dirty-stats $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-val-mirror $RPM_BUILD_ROOT/usr/bin
 install -m 0644 my-kill-blockers.1.gz $RPM_BUILD_ROOT/usr/share/man/man1
 install -m 0644 my-mirror.1.gz $RPM_BUILD_ROOT/usr/share/man/man1
+install -m 0644 my-mirror.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/man8
 install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/man8
 
 %files
 /usr/share/man/man1/my-kill-blockers.1.gz
 /usr/share/man/man1/my-mirror.1.gz
+/usr/share/man/man8/my-mirror.conf.8.gz
 /usr/share/man/man8/my-update-dirty-stats.conf.8.gz
 /usr/bin/my-analyze-all-tables
 /usr/bin/my-compare-count
@@ -101,6 +103,10 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Tue Apr 28 2026 Rodrigo Tassinari 1.5.5
+- my-mirror: When in AWS mode, copy executed GTID set
+- my-mirror: Added man page for my-mirror.conf(8)
 
 * Fri Apr 24 2026 Rodrigo Tassinari 1.5.4
 - my-update-dirty-stats: Save log in a subdirectory with login path name
