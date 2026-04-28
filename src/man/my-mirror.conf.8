@@ -1,0 +1,28 @@
+.\" Manpage for my-mirror.
+
+.TH man 8 "my-mirror.conf man page"
+
+.SH NAME
+
+my-mirror.conf \- my-mirror configuration
+
+.SH VARIABLES
+
+==> Section "main"
+
+log_dir: Directory where log file will be written.
+Default: /var/log/my-admin-tools/my-mirror
+
+work_dir: Directory used to keep contexts about my-mirror operation.
+Default: /var/lib/my-admin-tools/my-mirror
+
+.SH EXAMPLE
+
+[main]
+
+log_dir=/root/log/mysql/mirror
+
+work_dir=/root/work/my-mirror
+
+.SH AUTHOR
+Rodrigo Cardoso <rodrigocardoso@tjrs.jus.br>
