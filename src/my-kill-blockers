@@ -52,7 +52,7 @@ function kill_row_blockers()
 
 		ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
 		local CMD="kill connection $PID"
-		if [ $AWS_MODE -eq ]; then
+		if [ $AWS_MODE -eq 1 ]; then
 			CMD="call mysql.rds_kill($PID)"
 		fi
 
@@ -109,7 +109,7 @@ function kill_metadata_blockers()
 		write_out "PID: $PID, User: $USER, Host: $HOST, Object: $TABLE_NAME [SCHEMA TABLE LOCK]"
 		ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
 		local CMD="kill connection $PID"
-		if [ $AWS_MODE -eq ]; then
+		if [ $AWS_MODE -eq 1 ]; then
 			local CMD="call mysql.rds_kill($PID)"
 		fi
 		mysql --login-path=$LOGIN_PATH --connect-timeout=$CONNECT_TIMEOUT -e "$CMD" 2>$ERR_BUFF
