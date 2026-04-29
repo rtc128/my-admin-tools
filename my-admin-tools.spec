@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.6
+Version:			 1.5.7
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -36,6 +36,8 @@ install -m 0755 -d $RPM_BUILD_ROOT/usr/share/man/man8
 install -m 0755 src/my-analyze-all-tables $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-count $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-compare-data $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-copy-constraints $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-copy-indexes $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-db-compare $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-constraints $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-events $RPM_BUILD_ROOT/usr/bin
@@ -75,6 +77,8 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-analyze-all-tables
 /usr/bin/my-compare-count
 /usr/bin/my-compare-data
+/usr/bin/my-copy-constraints
+/usr/bin/my-copy-indexes
 /usr/bin/my-db-compare
 /usr/bin/my-drop-all-constraints
 /usr/bin/my-drop-all-events
@@ -103,6 +107,10 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Wed Apr 29 2026 Rodrigo Tassinari 1.5.7
+- New tool: my-copy-constraints
+- New tool: my-copy-indexes
 
 * Wed Apr 29 2026 Rodrigo Tassinari 1.5.6
 - my-kill-blockers: Bug fix in script
