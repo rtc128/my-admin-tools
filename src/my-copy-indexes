@@ -1,0 +1,98 @@
+#!/bin/bash
+
+function copy_one_table_indexes()
+{
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+
+	local QUERY="show create table \`$TABLE\`"
+	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	local OUT_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	mysql --login-path=$SRC -N -e "$QUERY" $SCHEMA >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	cat $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+	sed -i -e 's/\\n/\n/g' -e 's/\\t/\t/g' $OUT_BUFF
+	sed -i -e 's/,$//' $OUT_BUFF
+	local DEF_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+	grep -E '^  KEY' $OUT_BUFF | sed -e 's/^  //' >$DEF_BUFF
+	rm $OUT_BUFF
+	local SIZE=`stat -c %s $DEF_BUFF`
+	if [ $SIZE -eq 0 ]; then
+		rm $DEF_BUFF
+		return 0
+	fi
+
+	if [ "$DEBUG" == "1" ]; then
+		echo "Definition buffer before replacing:" >&2
+		cat $DEF_BUFF >&2
+	fi
+	sed -i -E -e "s/^(KEY .*)/ALTER TABLE \`$TABLE\` ADD \1\;/" $DEF_BUFF
+	if [ "$DEBUG" == "1" ]; then
+		echo "Definition buffer after replacing:" >&2
+		cat $DEF_BUFF >&2
+	fi
+
+	local PROC_RET_CODE=0
+	while read -e QUERY; do
+		local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
+		mysql --login-path=$DST -e "set sql_mode=''; $QUERY" "$SCHEMA" 2>$ERR_BUFF
+		local RC=$?
+		cat $ERR_BUFF
+		rm $ERR_BUFF
+		[ $RC -eq 0 ] || { echo "   $QUERY"; PROC_RET_CODE=1; break; }
+	done <$DEF_BUFF
+
+	rm $DEF_BUFF
+	return $PROC_RET_CODE
+}
+
+function run()
+{
+	local OPT
+	while getopts ":h" OPT; do
+		case $OPT in
+			h)
+				usage
+				return 0;;
+			*)
+				echo "Unknown option '$OPT'" >&2
+				usage
+				return 1;;
+		esac
+	done
+	shift $((OPTIND-1))
+
+	if [ $# -ne 4 ]; then
+		usage
+		return 1
+	fi
+
+	SRC="$1"
+	DST="$2"
+	SCHEMA="$3"
+	TABLE="$4" 
+	WORK_DIR=/tmp
+	copy_one_table_indexes || return 1
+}
+
+function usage()
+{
+	echo "*** my-admin-tools ***" 
+	echo "$0 - copy indexes between instances"
+	echo "Usage:" 
+	echo "$0 -h"
+	echo "   show help and exit"
+	echo "$0 <source> <destination> <schema> <table>"
+	echo "   <source>: source login path"
+	echo "   <destination>: destination login path"
+	echo "   <schema>: schema name"
+	echo "   <table>: table name"
+}
+
+if [ "$DEBUG" == "1" ]; then
+	set -xv
+fi
+run $*
+RC=$?
+exit $RC
