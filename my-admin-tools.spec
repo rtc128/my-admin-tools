@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.5
+Version:			 1.5.6
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -103,6 +103,9 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Wed Apr 29 2026 Rodrigo Tassinari 1.5.6
+- my-kill-blockers: Bug fix in script
 
 * Tue Apr 28 2026 Rodrigo Tassinari 1.5.5
 - my-mirror: When in AWS mode, copy executed GTID set
