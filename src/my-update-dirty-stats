@@ -7,6 +7,7 @@ function analyze()
 		return 0
 	fi
 
+	write_out "   Analyzing"
 	local ERR_BUFF=`mktemp /tmp/my-update-dirty-stats.XXXXXX`
 	local OUT_BUFF=`mktemp /tmp/my-update-dirty-stats.XXXXXX`
 	local QUERY="analyze table \`$TABLE\`"
@@ -16,6 +17,68 @@ function analyze()
 	write_file_out $ERR_BUFF
 	rm $ERR_BUFF $OUT_BUFF
 	[ $RC -eq 0 ] || { write_out "$QUERY"; return 1; }
+}
+
+function check_one_table()
+{
+	write_out "Checking table '$TABLE'"
+
+	if [ $FORCE -eq 1 ]; then
+		analyze
+		local RC=$?
+		return $RC
+	fi
+
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local OUT_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local QUERY="select ts.num_rows, ts.modified_counter, ts.stats_initialized from innodb_tablestats ts join innodb_tables t on ts.table_id = t.table_id where t.name = '$SCHEMA/$TABLE'"
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" information_schema >$OUT_BUFF 2>$ERR_BUFF
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
+
+	local NUM_ROWS=`cat $OUT_BUFF | awk '{print $1;}'`
+	local MOD_COUNT=`cat $OUT_BUFF | awk '{print $2;}'`
+	local STATUS=`cat $OUT_BUFF | awk '{print $3;}'`
+	rm $OUT_BUFF
+
+	write_out "   Num rows: $NUM_ROWS"
+	write_out "   Mod count: $MOD_COUNT"
+	write_out "   Status: $STATUS"
+	local UP_STATUS=${STATUS^^}
+
+	if [ "$UP_STATUS" == "UNINITIALIZED" ]; then
+		analyze
+		local RC=$?
+		return $RC
+	fi
+	if [ $NUM_ROWS -eq 0 ]; then
+		analyze
+		local RC=$?
+		return $RC
+	fi
+
+	#if modified count is more than 10% of num rows, analyze
+	local PERCENT=`echo $MOD_COUNT \* 100 / $NUM_ROWS | bc`
+	write_out "   Percent: $PERCENT"
+	if [ $PERCENT -gt 10 ]; then
+		analyze || return 1
+	fi
+}
+
+function check_tables()
+{
+	if [ -n "$TABLE" ]; then
+		check_one_table || return 1
+	fi
+	if [ -n "$LIST_FILE" ]; then
+		[ -f "$LIST_FILE" ] || { write_out "Can't find file '$LIST_FILE'"; return 1; }
+	fi
+
+	while read -e TABLE; do
+		check_one_table || return 1
+	done <"$LIST_FILE"
 }
 
 function mount_log_path()
@@ -36,8 +99,15 @@ function mount_log_path()
 
 function print_options()
 {
-	write_out "Schema: $SCHEMA"
-	write_out "Table: $TABLE"
+	if [ -n "$SCHEMA" ]; then
+		write_out "Schema: $SCHEMA"
+	fi
+	if [ -n "$TABLE" ]; then
+		write_out "Table: $TABLE"
+	fi
+	if [ -n "$LIST_FILE" ]; then
+		write_out "Table list file: $LIST_FILE"
+	fi
 
 	local AUX=off
 	if [ $FORCE -eq 1 ]; then
@@ -58,11 +128,16 @@ function run()
 	LOGIN_PATH=client
 	FORCE=0
 	TEST_MODE=0
+	LIST_FILE=
+	SCHEMA=
+	TABLE=
 
-	while getopts ":c:fhl:t" OPT; do
+	while getopts ":c:dfhl:o:s:" OPT; do
 		case $OPT in
 			c)
 				CONFIG_FILE="$OPTARG";;
+			d)
+				TEST_MODE=1;;
 			f)
 				FORCE=1;;
 			l)
@@ -70,74 +145,47 @@ function run()
 			h)
 				usage
 				return 0;;
+			o)
+				LIST_FILE="$OPTARG";;
+			s)
+				SCHEMA="$OPTARG";;
 			t)
-				TEST_MODE=1;;
+				TABLE="$OPTARG";;
+
 		esac
 	done
 	shift $((OPTIND-1))
-	if [ $# -ne 2 ]; then
+	if [ $# -ne 0 ]; then
 		echo "Invalid command line" >&2
 		usage
 		return 1
 	fi
 
-	SCHEMA="$1"
-	TABLE="$2"
-
 	local TMP_LOG_FILE="`mount_log_path`" || return 1
 	write_out "Log file: $TMP_LOG_FILE"
 	LOG_FILE="$TMP_LOG_FILE"
-	write_out "Starting"
 	print_options
-
-	if [ $FORCE -eq 1 ]; then
-		analyze
-		local RC=$?
-		return $RC
-	fi
-
-	local ERR_BUFF=`mktemp /tmp/my-update-dirty-stats.XXXXXX`
-	local OUT_BUFF=`mktemp /tmp/my-update-dirty-stats.XXXXXX`
-	local QUERY="select ts.num_rows, ts.modified_counter, ts.stats_initialized from innodb_tablestats ts join innodb_tables t on ts.table_id = t.table_id where t.name = '$SCHEMA/$TABLE'"
-	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" information_schema >$OUT_BUFF 2>$ERR_BUFF
-	local RC=$?
-	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
-	[ $RC -eq 0 ] || { rm $OUT_BUFF; return 1; }
-
-	local NUM_ROWS=`cat $OUT_BUFF | awk '{print $1;}'`
-	local MOD_COUNT=`cat $OUT_BUFF | awk '{print $2;}'`
-	local STATUS=`cat $OUT_BUFF | awk '{print $3;}'`
-	rm $OUT_BUFF
-
-	write_out "Num rows: $NUM_ROWS"
-	write_out "Mod count: $MOD_COUNT"
-	write_out "Status: $STATUS"
-	local UP_STATUS=${STATUS^^}
-
-	if [ "$UP_STATUS" == "UNINITIALIZED" ]; then
-		analyze || return 1
-	fi
-
-	#if modified count is more than 10% of num rows, analyze
-	local PERCENT=$((NUM_ROWS/10))
-	if [ $PERCENT -lt $MOD_COUNT ]; then
-		analyze || return 1
-	fi
-
+	check_tables || return 1
 }
 
 function usage()
 {
-	echo "my-admin-tools"
-	echo "my-update-table-stats - Update table statistics when they are too old"
+	echo "*** my-admin-tools ***"
+	echo "$0 - Update table statistics when they are too old"
 	echo "Usage:" 
-	echo "$0 [ -c <file> ] [ -f ] [ -h ] [ -l <path> ] [ -t ] <schema> <table>"
+	echo "$0 [ -c <file> ] [ -d ] [ -f ] [ -h ] [ -l <path> ] [ -o <file> ] [ -s <schema> ] [ -t <table> ]"
 	echo "   -c: Use config file <file>. Default: /etc/my-admin-tools/my-update-dirty-stats.conf."
-	echo "   -f: Enable FORCE mode. Update stats without checking modify count."
+	echo "   -d: Enable TEST mode. Only show stats. Do not try to update them."
+	echo "   -f: Enable FORCE mode. Update stats without checking modification length."
 	echo "   -h: Display this help and exit."
 	echo "   -l: Use login path <path>. Default: client. See mysql_config_editor."
-	echo "   -t: Enable TEST mode. Only show stats. Do not try to update them."
+	echo "   -o: Read table list from <file>. File must have one table per line."
+	echo "      Require -s."
+	echo "      Can't be used with -t."
+	echo "   -s: Run only for schema <schema>."
+	echo "   -t: Run only for table <table>."
+	echo "      Require -s."
+	echo "      Can't be used with -o."
 	echo "See:"
 	echo "   man: my-update-dirty-stats.conf"
 }
