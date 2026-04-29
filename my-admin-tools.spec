@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.7
+Version:			 1.5.8
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -107,6 +107,9 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Wed Apr 29 2026 Rodrigo Tassinari 1.5.8
+- my-update-dirty-stats: Allow to inform a file with the table list
 
 * Wed Apr 29 2026 Rodrigo Tassinari 1.5.7
 - New tool: my-copy-constraints
