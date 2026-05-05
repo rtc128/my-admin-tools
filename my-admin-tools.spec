@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.8
+Version:			 1.5.9
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -107,6 +107,9 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Tue May 5 2026 Rodrigo Tassinari 1.5.9
+- my-db-compare: Read table row count with multithread
 
 * Wed Apr 29 2026 Rodrigo Tassinari 1.5.8
 - my-update-dirty-stats: Allow to inform a file with the table list
