@@ -2,14 +2,32 @@
 
 function compare_rows()
 {
-	local QUERY="select count(1) from $TABLE"
+	echo 0 >$CANCEL_FILE
+	local COUNT_FILE_1=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local COUNT_FILE_2=`mktemp /tmp/my-admin-tools.XXXXXX`
+
 	write_out "         Comparing row count"
-	write_out "            $LPATH1"
-	local COUNT1=`mysql --login-path=$LPATH1 -N -e "$QUERY" $SCHEMA` || return 1
-	write_out "               $COUNT1"
-	write_out "            $LPATH2"
-	local COUNT2=`mysql --login-path=$LPATH2 -N -e "$QUERY" $SCHEMA` || return 1
-	write_out "               $COUNT2"
+	LOGIN_PATH=$LPATH1
+	RESULT_FILE=$COUNT_FILE_1
+	th_count &
+
+	LOGIN_PATH=$LPATH2
+	RESULT_FILE=$COUNT_FILE_2
+	th_count &
+
+	wait
+
+	local CANC=`cat $CANCEL_FILE`
+	if [ $CANC -eq 1 ]; then
+		rm $COUNT_FILE_1 $COUNT_FILE_2
+		return 1
+	fi
+
+	local COUNT1=`cat $COUNT_FILE_1`
+	local COUNT2=`cat $COUNT_FILE_2`
+	rm $COUNT_FILE_1 $COUNT_FILE_2
+	write_out "            $LPATH1: $COUNT1"
+	write_out "            $LPATH2: $COUNT2"
 	if [ $COUNT1 -ne $COUNT2 ]; then
 		write_out "Difference found - row count"
 	fi
@@ -18,8 +36,8 @@ function compare_rows()
 function compare_struct()
 {
 	write_out "         Comparing table structure"
-	local STRUCT1=`mktemp /tmp/my-db-compare.XXXXXX`
-	local STRUCT2=`mktemp /tmp/my-db-compare.XXXXXX`
+	local STRUCT1=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local STRUCT2=`mktemp /tmp/my-admin-tools.XXXXXX`
 	local QUERY="show create table \`$TABLE\`"
 	write_out "            $LPATH1"
 	mysql --login-path=$LPATH1 -N -e "$QUERY" $SCHEMA >$STRUCT1 || { rm $STRUCT1 $STRUCT 2; return 1; }
@@ -30,6 +48,18 @@ function compare_struct()
 	fi
 	rm $STRUCT1 $STRUCT2
 }
+
+function th_count()
+{
+	local ERR_BUFF=`mktemp /tmp/my-admin-tools.XXXXXX`
+	local QUERY="select count(1) from $TABLE"
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" $SCHEMA >"$RESULT_FILE" 2>"$ERR_BUFF"
+	local RC=$?
+	write_file_out $ERR_BUFF
+	rm $ERR_BUFF
+	[ $RC -eq 0 ] || echo 1 >$CANCEL_FILE
+}
+
 
 function usage()
 {
@@ -71,23 +101,38 @@ function run()
 	QUERY="select schema_name from information_schema.schemata where schema_name not in ('sys', 'information_schema', 'performance_schema', 'mysql') order by 1"
 	SCHEMAS=`mysql --login-path=$LPATH1 -N -e "$QUERY"` || return 1
 
+	CANCEL_FILE=`mktemp /tmp/my-admin-tools.XXXXXX`
+	echo 0 >$CANCEL_FILE
 	for SCHEMA in $SCHEMAS; do
 		write_out "   Entering schema '$SCHEMA'"
 		write_out "   Listing tables"
 
 		QUERY="select table_name from information_schema.tables where table_schema = '$SCHEMA' and table_type = 'BASE TABLE'"
-		TABLES=`mysql --login-path=$LPATH1 -N -e "$QUERY"` || return 1
+		TABLES=`mysql --login-path=$LPATH1 -N -e "$QUERY"` || { rm $CANCEL_FILE; return 1; }
 
 		for TABLE in $TABLES; do
 			write_out "      Comparing table '$TABLE'"
 			if [ $CMP_ROWS -eq 1 ]; then
-				compare_rows || return 1
+				compare_rows || { rm $CANCEL_FILE; return 1; }
 			fi
 			if [ $CMP_STRUCT -eq 1 ]; then
-				compare_struct || return 1
+				compare_struct || { rm $CANCEL_FILE; return 1; }
 			fi
 		done
 	done
+	rm $CANCEL_FILE
+}
+
+function write_file_out()
+{
+	local OUT_F="$1"
+	local SIZE=`stat -c %s "$OUT_F"`
+	if [ $SIZE -eq 0 ]; then
+		return 0
+	fi
+	local TS=`date +"%d %H:%M:%S"`
+	local MSG="[$TS]\n`cat \"$OUT_F\" | sed -e 's/^/\t/'`"
+	echo -e "$MSG"
 }
 
 function write_out()
