@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.9
+Version:			 1.5.10
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -107,6 +107,11 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Fri May 8 2026 Rodrigo Tassinari 1.5.10
+- my-mirror: Table constraints copy can't be multi-thread, because it causes deadlock
+- my-mirror: Fix in partitioning checking
+- my-mirror: Fix in partitioning (ROWNUM) range: first row was being ignored :(
 
 * Tue May 5 2026 Rodrigo Tassinari 1.5.9
 - my-db-compare: Read table row count with multithread
