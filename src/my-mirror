@@ -565,12 +565,13 @@ function copy_schema_constraints()
 	list_tables_simple || { rm $TABLE_LIST_FILE; return 1; }
 
 	: >>$LOCK_FILE
-	local I
-	local LIST=`seq 1 $TH_COUNT`
-	for I in $LIST; do
-		th_copy_table_constraints &
-	done
-	wait
+	#local I
+	#can't be multi-threaded because it causes deadlock
+	#local LIST=`seq 1 $TH_COUNT`
+	#for I in $LIST; do
+	th_copy_table_constraints
+	#done
+	#wait
 	rm $LOCK_FILE $TABLE_LIST_FILE
 	local CANCEL=`cat $CANCEL_FILE`
 	return $CANCEL
@@ -901,7 +902,7 @@ function list_tables()
 	rm $ERR_BUFF
 	[ $SIZE -eq 0 ] || { rm $TABLE_PRE_LIST_FILE; return 1; }
 
-	if [ $LIMIT_PARTITION_SIZE -eq 0 ]; then
+	if [ $LIMIT_PARTITION_SIZE_BYTES -eq 0 ]; then
 		awk '{print $1;}' $TABLE_PRE_LIST_FILE >$TABLE_LIST_FILE || { rm $TABLE_PRE_LIST_FILE; return 1; }
 		local RC=$?
 		rm $TABLE_PRE_LIST_FILE
@@ -945,7 +946,7 @@ function list_tables_th()
 		local TABLE_SIZE=$((TABLE_ROWS * ROW_SIZE))
 
 		#if no limit defined, just mount table list
-		if [ $LIMIT_PARTITION_SIZE -eq 0 ]; then
+		if [ $LIMIT_PARTITION_SIZE_BYTES -eq 0 ]; then
 			echo $TABLE >>$TABLE_LIST_FILE
 		else
 			#split tables
@@ -1501,7 +1502,9 @@ function copy_one_table_interval()
 	if [ $BY_ROWNUM -eq 1 ]; then
 		local COUNT=$((LAST-FIRST+1))
 		local TABLE_WITH_INT="$TABLE [rows #$FIRST to #$LAST]"
-		local WHERE="true limit $FIRST, $COUNT"
+
+		local FIRST_ROW_DB=$((FIRST-1))
+		local WHERE="true limit $FIRST_ROW_DB, $COUNT"
 	fi
 	write_out "      Starting table '$TABLE_WITH_INT'"
 
