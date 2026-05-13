@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.10
+Version:			 1.5.11
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -107,6 +107,9 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Wed May 13 2026 Rodrigo Tassinari 1.5.11
+- my-mirror: Fix in AWS RDS mode: copying grants
 
 * Fri May 8 2026 Rodrigo Tassinari 1.5.10
 - my-mirror: Table constraints copy can't be multi-thread, because it causes deadlock
