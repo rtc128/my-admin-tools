@@ -145,14 +145,6 @@ function copy_aws()
 
 function copy_aws_startup()
 {
-	#save information about copy config
-	#local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
-	#crudini --set "$COPY_CONFIG_FILE" main limit_partition_size $LIMIT_PARTITION_SIZE >$ERR_BUFF
-	#local RC=$?
-	#write_file_out $ERR_BUFF
-	#rm $ERR_BUFF
-	#[ $RC -eq 0 ] || return 1
-
 	CREATE_TABLES=0
 	RC=$?
 	[ $RC -eq 0 ] || return 1
@@ -669,10 +661,14 @@ function copy_schema_grants()
 	write_out "Adding schema privileges"
 	QUERY="select concat('grant ', privilege_type, ' on ', table_schema, '.* to ', grantee, ';') as cmd
 			from information_schema.schema_privileges
-			where grantee not like '\'mysql.%' and replace(grantee, '\'', '') <> current_user()"
+			where grantee not like '\'mysql.%' and grantee not like '\'rdsproxyadmin\'@%' and replace(grantee, '\'', '') <> current_user()"
 	BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF || return 1
-	mysql --login-path=$DST <$BUFF || return 1
+	if [ "$DEBUG" == "1" ]; then
+		mysql --login-path=$DST -v <$BUFF >&2 || return 1
+	else
+		mysql --login-path=$DST <$BUFF || return 1
+	fi
 	rm $BUFF
 }
 
