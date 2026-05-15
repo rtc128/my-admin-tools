@@ -169,8 +169,10 @@ function copy_aws_finish()
 	fi
 
 	copy_virtual_columns || return 1
-	copy_all_indexes || return 1
-	copy_all_constraints || return 1
+	if [ "$MY_MIRROR_FULL_TABLE_STRUCT" != "1" ]; then
+		copy_all_indexes || return 1
+		copy_all_constraints || return 1
+	fi
 	create_all_views || return 1
 	copy_full_grants || return 1
 	copy_full_triggers || return 1
@@ -307,7 +309,11 @@ function create_all_tables()
 				continue
 			fi
 			write_out "      $TABLE"
-			mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE 2>$ERR_BUFF | sed -e 's/^  KEY .*$//' -e 's/^  CONSTRAINT .*//' -e '/^$/d' | sed -z -e 's/,\n)/\n)/g' >$SQL_BUFF 2>$ERR_BUFF
+			if [ "$MY_MIRROR_FULL_TABLE_STRUCT" == "1" ]; then
+				mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE >$SQL_BUFF 2>$ERR_BUFF
+			else
+				mysqldump --login-path=$SRC --set-gtid-purged=off --max-allowed-packet=${MAX_ALLOWED_PACKET_MB}M --no-data --skip-add-drop-table --skip-add-locks --skip-lock-tables --skip-triggers $SCHEMA $TABLE 2>$ERR_BUFF | sed -e 's/^  KEY .*$//' -e 's/^  CONSTRAINT .*//' -e '/^$/d' | sed -z -e 's/,\n)/\n)/g' >$SQL_BUFF
+			fi
 			local RC=$?
 			write_file_out $ERR_BUFF
 			[ $RC -eq 0 ] || { rm $DST_OBJ_LIST $ERR_BUFF $TABLE_LIST $SQL_BUFF; return 1; }
@@ -1960,7 +1966,7 @@ function usage()
 {
 	echo "Usage:" 
 	echo "$0 [ -A ] [ -E ] [ -R ] [ -S ] [ -T ] [ -U ] [ -V ] [ -a ] [ -b <dir> ] [ -c <file> ] [ -d <login path> ] [ -h ] [ -i <file> ] [ -k ] [ -l <size> ] [ -r ] -s <login path> [ -n <threads> ] [ -t ] [ <schema> [ <table> | @<table list file>] ]"
-	echo "   -A: Activate AWS Mode. See below."
+	echo "   -A: Activate AWS Mode. Copy all objects (users, grants, events, views, tables, triggers). For better performance, indexes and constraints are copied after data."
 	echo "   -E: Copy events"
 	echo "   -G: Copy grants"
 	echo "   -R: Copy routines"
@@ -1997,6 +2003,7 @@ function usage()
 	echo "      MY_ADMIN_TOOLS_MAX_RETRY_COUNT: max number of tries when an access ta a database is failing"
 	echo "      MY_ADMIN_TOOLS_RETRY_INTERVAL: interval (seconds) between each try when there are failures accessing databases"
 	echo "      MY_MIRROR_TXN_LEN_FORCE_LIMIT: for tables partitioned by PK, each partition will have no more than <MY_MIRROR_TXN_LEN_FORCE_LIMIT> rows, even if average row length is very small."
+	echo "      MY_MIRROR_FULL_TABLE_STRUCT=1: When copying tables in AWS mode, copy indexes and constraints before copying data. Indexes on VIRTUAL columns won't be copied."
 }
 
 function validate_options()
