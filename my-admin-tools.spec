@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.11
+Version:			 1.5.12
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -107,6 +107,9 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Fri May 13 2026 Rodrigo Tassinari 1.5.12
+- my-mirror: Added support for indexes creation before data copy, via env var.
 
 * Wed May 13 2026 Rodrigo Tassinari 1.5.11
 - my-mirror: Fix in AWS RDS mode: copying grants
