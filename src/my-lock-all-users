@@ -1,0 +1,89 @@
+#!/bin/bash
+
+function usage()
+{
+	echo "my-admin-tools: my-lock-all-users - Lock all users in a mysql instance"
+	echo "Usage: $0 -A [ -l <path> ] -u <file>"
+	echo "   -A: Active AWS RDS mode (internal RDS accounts are ignored)"
+	echo "   -l: use login path <path>"
+	echo "      Default: 'client'"
+	echo "   -u: Generate an unlock script and save it in <file>"
+	echo "Credentials must be saved using 'mysql_config_editor'"
+}
+
+function generate_script()
+{
+	local SCRIPT=$1
+
+	local FILTER="user <> '' and authentication_string <> '' and user <> 'root' and user not like 'mysql.%'"
+	if [ $AWS -eq 1 ]; then
+		FILTER="$FILTER and user not like 'AWS_%' and user <> 'admin' and user <> 'rdsadmin'"
+	fi
+
+	QUERY="select concat('alter user \"', user, '\"@\"', host, '\" account lock;') as command from mysql.user where $FILTER"
+	mysql --login-path=$LOGIN_PATH -N -e "$QUERY" >$SCRIPT || return 1
+}
+
+function run()
+{
+	AWS=0
+	LOGIN_PATH=client
+	UNLOCK_SCRIPT=
+
+	while getopts "Al:u:" opt; do
+		case $opt in
+			A)
+				AWS=1;;
+			l)
+				LOGIN_PATH=$OPTARG;;
+			u)
+				UNLOCK_SCRIPT="$OPTARG";;
+			*)
+				echo "Unknown option '$opt'" >&2
+				usage
+				return 1;;
+		esac
+	done
+
+	shift $((OPTIND-1))
+
+	if [ $# -ne 0 ]; then
+		usage
+		return 1
+	fi
+
+	#check unlock script
+	if [ -n "$UNLOCK_SCRIPT" ]; then
+		if [ -f "$UNLOCK_SCRIPT" ]; then
+			echo "File '$UNLOCK_SCRIPT' exists - aborting"
+			return
+		fi
+		touch "$UNLOCK_SCRIPT" || return 1
+	fi
+
+	local SCRIPT=`mktemp /tmp/my-admin-tools.XXXXXX`
+	if ! generate_script $SCRIPT; then
+		rm $SCRIPT
+		if [ -n "$UNLOCK_SCRIPT" ]; then
+			rm "$UNLOCK_SCRIPT"
+		fi
+		return 1
+	fi
+	if [ -n "$UNLOCK_SCRIPT" ]; then
+		sed -e 's/account lock/account unlock/g' $SCRIPT >"$UNLOCK_SCRIPT"
+	fi
+	local COUNT=`cat $SCRIPT | wc -l`
+	if ! mysql --login-path=$LOGIN_PATH <$SCRIPT; then
+		if [ -n "$UNLOCK_SCRIPT" ]; then
+			rm "$UNLOCK_SCRIPT"
+			rm $SCRIPT
+		fi
+		return 1
+	fi
+	rm $SCRIPT
+	echo "Count: $COUNT"
+}
+
+run $*
+RC=$?
+exit $RC
