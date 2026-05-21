@@ -1,21 +1,21 @@
 #!/bin/bash
 
-function usage()
+function confirm()
 {
-	echo "my-admin-tools: my-lock-all-users - Lock all users in a mysql instance"
-	echo "Usage: $0 -A [ -l <path> ] -u <file>"
-	echo "   -A: Active AWS RDS mode (internal RDS accounts are ignored)"
-	echo "   -l: use login path <path>"
-	echo "      Default: 'client'"
-	echo "   -u: Generate an unlock script and save it in <file>"
-	echo "Credentials must be saved using 'mysql_config_editor'"
+	if [ $ANSWER_YES -eq 1 ]; then
+		return 0
+	fi
+
+	echo -n "Are you sure you want to lock users (you must type 'yes')? "
+	read ANSWER
+	[ "$ANSWER" == "yes" ] || return 1
 }
 
 function generate_script()
 {
 	local SCRIPT=$1
 
-	local FILTER="user <> '' and authentication_string <> '' and user <> 'root' and user not like 'mysql.%'"
+	local FILTER="user <> '' and authentication_string <> '' and user <> 'root' and user not like 'mysql.%' and account_locked = 'N'"
 	if [ $AWS -eq 1 ]; then
 		FILTER="$FILTER and user not like 'AWS_%' and user <> 'admin' and user <> 'rdsadmin'"
 	fi
@@ -26,18 +26,24 @@ function generate_script()
 
 function run()
 {
+	ANSWER_YES=0
 	AWS=0
 	LOGIN_PATH=client
 	UNLOCK_SCRIPT=
 
-	while getopts "Al:u:" opt; do
+	while getopts "Ahl:u:y" opt; do
 		case $opt in
 			A)
 				AWS=1;;
+			h)
+				usage
+				return 0;;
 			l)
 				LOGIN_PATH=$OPTARG;;
 			u)
 				UNLOCK_SCRIPT="$OPTARG";;
+			y)
+				ANSWER_YES=1;;
 			*)
 				echo "Unknown option '$opt'" >&2
 				usage
@@ -58,6 +64,17 @@ function run()
 			echo "File '$UNLOCK_SCRIPT' exists - aborting"
 			return
 		fi
+		touch "$UNLOCK_SCRIPT" || return 1
+	fi
+
+	if ! confirm; then
+		if [ -n "$UNLOCK_SCRIPT" ]; then
+			rm "$UNLOCK_SCRIPT"
+		fi
+		return 1
+	fi	
+
+	if [ -n "$UNLOCK_SCRIPT" ]; then
 		touch "$UNLOCK_SCRIPT" || return 1
 	fi
 
@@ -82,6 +99,19 @@ function run()
 	fi
 	rm $SCRIPT
 	echo "Count: $COUNT"
+}
+
+function usage()
+{
+	echo "my-admin-tools: my-lock-all-users - Lock all users in a mysql instance"
+	echo "Usage: $0 -A [ -h ] [ -l <path> ] -u <file>"
+	echo "   -A: Active AWS RDS mode (internal RDS accounts are ignored)"
+	echo "   -h: Display this help and exit"
+	echo "   -l: Use login path <path>"
+	echo "      Default: 'client'"
+	echo "   -u: Generate an unlock script and save it in <file>. Users that are locked before execution will not be unlocked."
+	echo "   -y: Assume YES to all questions"
+	echo "Credentials must be saved using 'mysql_config_editor'"
 }
 
 run $*

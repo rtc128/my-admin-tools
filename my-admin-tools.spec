@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.12
+Version:			 1.5.13
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -22,6 +22,7 @@ Administration tools for MySQL:
 - Drop all users: my-drop-all-users
 - Kill blocking sessions: my-kill-blockers
 - Kill sessions: my-kill-sessions
+- Lock all users: my-lock-all-users
 - Mirror a database (copy objects/schemas): my-mirror
 - Truncate all tables: my-truncate-all-tables
 - Validate a replica created with my-mirror: my-val-mirror
@@ -57,6 +58,7 @@ install -m 0755 src/my-get-digest $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-kill-blockers $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-kill-long-transactions $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-kill-sessions $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-lock-all-users $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-mirror $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-repl-skip-failed-transaction $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-replace-table $RPM_BUILD_ROOT/usr/bin
@@ -98,6 +100,7 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-kill-blockers
 /usr/bin/my-kill-long-transactions
 /usr/bin/my-kill-sessions
+/usr/bin/my-lock-all-users
 /usr/bin/my-mirror
 /usr/bin/my-repl-skip-failed-transaction
 /usr/bin/my-replace-table
@@ -107,6 +110,9 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Thu May 21 2026 Rodrigo Tassinari 1.5.13
+- New tool: my-lock-all-users
 
 * Fri May 13 2026 Rodrigo Tassinari 1.5.12
 - my-mirror: Added support for indexes creation before data copy, via env var.
