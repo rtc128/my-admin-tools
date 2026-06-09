@@ -47,7 +47,7 @@ function copy_gtids()
 	[ $RC -eq 0 ] || return 1
 }
 
-function create_events()
+function copy_events()
 {
 	local DST_OBJ_LIST="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local ERR_BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
@@ -156,8 +156,8 @@ function copy_aws_startup()
 	copy_all_users || return 1
 	copy_schema_grants || return 1
 	copy_table_grants || return 1
-	create_all_routines || return 1
-	create_all_events || return 1
+	copy_all_routines || return 1
+	copy_all_events || return 1
 	return 0
 }
 
@@ -180,14 +180,14 @@ function copy_aws_finish()
 	return 0
 }
 
-function create_all_events()
+function copy_all_events()
 {
 	local S
-	write_out "Creating events"
+	write_out "Copying events"
 	for S in `cat $SCHEMA_LIST_FILE`; do
 		SCHEMA=$S
 		write_out "   $SCHEMA"
-		create_events || return 1
+		copy_events || return 1
 	done
 }
 
@@ -213,10 +213,10 @@ function copy_full_grants()
 	rm $OUT_BUFF
 }
 
-function create_all_routines()
+function copy_all_routines()
 {
 	local SCHEMA
-	write_out "Creating routines"
+	write_out "Copying routines"
 	for SCHEMA in `cat $SCHEMA_LIST_FILE`; do
 		local CANCEL=`cat $CANCEL_FILE`
 		[ $CANCEL -eq 0 ] || return 1
@@ -224,14 +224,14 @@ function create_all_routines()
 		write_out "   $SCHEMA"
 
 		write_out "      Functions"
-		create_routines FUNCTION || return 1
+		copy_routines FUNCTION || return 1
 
 		write_out "      Procedures"
-		create_routines PROCEDURE || return 1
+		copy_routines PROCEDURE || return 1
 	done
 }
 
-function create_routines()
+function copy_routines()
 {
 	local OBJ_TYPE=$1
 	local DST_OBJ_LIST="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
@@ -329,7 +329,7 @@ function create_all_tables()
 
 function copy_full_triggers()
 {
-	write_out "Creating triggers"
+	write_out "Copying triggers"
 	local LIST=`list_schemas` || return 1
 	local S
 	for S in $LIST; do
@@ -341,7 +341,7 @@ function copy_full_triggers()
 function create_all_views()
 {
 	local SCHEMA 
-	write_out "Creating views"
+	write_out "Copying views"
 	for SCHEMA in `cat $SCHEMA_LIST_FILE`; do
 		write_out "   $SCHEMA"
 		copy_views || return 1
@@ -369,12 +369,12 @@ function copy_one_role()
 
 function copy_foreign_keys()
 {
-	write_out "Creating foreign keys"
+	write_out "Copying foreign keys"
 }
 
 function copy_indexes()
 {
-	write_out "Creating indexes"
+	write_out "Copying indexes"
 }
 
 function copy_table_attachments()
@@ -621,7 +621,7 @@ function copy_all_table_data()
 
 function copy_all_users()
 {
-	write_out "Creating users"
+	write_out "Copying users"
 	QUERY="select user, host, authentication_string is null from mysql.user where user != '' and user not like 'mysql.%' and concat(user, '@', host) != (select current_user())"
 	local FILTER="user != '' and user not like 'mysql.%' and concat(user, '@', host) != (select current_user()) and user not like 'AWS%' and user not like 'rds%'"
 	mysqldump --login-path=$SRC --set-gtid-purged=off --skip-triggers --skip-add-locks --skip-disable-keys --skip-add-drop-table --no-create-info --skip-lock-tables --insert-ignore --complete-insert --skip-extended-insert --hex-blob --where "$FILTER" mysql user | mysql --login-path=$DST mysql || return 1
@@ -737,7 +737,7 @@ function copy_views()
 
 function copy_virtual_columns()
 {
-	write_out "Creating virtual columns"
+	write_out "Copying virtual columns"
 	local BUFF="`mktemp \"$WORK_DIR/my-mirror.XXXXXX\"`"
 	local QUERY="select table_schema, table_name, column_name from information_schema.columns where table_schema <> 'mysql' and extra = 'VIRTUAL GENERATED'"
 	mysql --login-path=$SRC -N -e "$QUERY" >$BUFF
@@ -1051,17 +1051,20 @@ function print_options()
 		write_out "AWS 'copy all' mode ON"
 	fi
 	write_out "Number of threads: $TH_COUNT"
+	if [ $COPY_TABLES -eq 1 ]; then
+		write_out "Copy tables: yes"
+	fi
 	if [ $COPY_EVENTS -eq 1 ]; then
-		write_out "Copy events: enabled"
+		write_out "Copy events: yes"
 	fi
 	if [ $FINISH_MODE -eq 1 ]; then
 		write_out "AWS 'finish mode' ON"
 	fi
 	if [ $COPY_GRANTS -eq 1 ]; then
-		write_out "Copy grants: enabled"
+		write_out "Copy grants: yes"
 	fi
 	if [ $COPY_ROUTINES -eq 1 ]; then
-		write_out "Copy routines: enabled"
+		write_out "Copy routines: yes"
 	fi
 	if [ $ONLY_TABLE_STRUCTURE -eq 1 ]; then
 		write_out "Only table structure: enabled"
@@ -1240,7 +1243,9 @@ function run_local()
 		copy_grants || return 1
 	fi
 	if [ $COPY_ROUTINES -eq 1 ]; then
-		copy_routines || return 1
+		write_out "Copying routines"
+		copy_routines PROCEDURE || return 1
+		copy_routines FUNCTION || return 1
 	fi
 	if [ $COPY_TABLES -eq 1 ]; then
 		if [ $ONLY_TRIGGERS -eq 1 ]; then
