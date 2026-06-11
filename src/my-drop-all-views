@@ -46,7 +46,7 @@ function drop_view()
 	mysql --login-path=$LOGIN_PATH $SCHEMA <$SCRIPT 2>$ERR_BUFF
 	local RC=$?
 	write_file_out $ERR_BUFF
-	rm $ERR_BUFF
+	rm $ERR_BUFF $SCRIPT
 	return $RC
 }
 
