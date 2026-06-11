@@ -1054,6 +1054,9 @@ function print_options()
 	if [ $COPY_TABLES -eq 1 ]; then
 		write_out "Copy tables: yes"
 	fi
+	if [ $COPY_VIEWS -eq 1 ]; then
+		write_out "Copy views: yes"
+	fi
 	if [ $COPY_EVENTS -eq 1 ]; then
 		write_out "Copy events: yes"
 	fi
