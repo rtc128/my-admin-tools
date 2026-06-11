@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.15
+Version:			 1.5.16
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -20,6 +20,7 @@ Administration tools for MySQL:
 - Drop all tables: my-drop-all-tables
 - Drop all triggers: my-drop-all-trigger
 - Drop all users: my-drop-all-users
+- Drop all users: my-drop-all-views
 - Kill blocking sessions: my-kill-blockers
 - Kill sessions: my-kill-sessions
 - Lock all users: my-lock-all-users
@@ -47,8 +48,9 @@ install -m 0755 src/my-drop-all-pks $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-routines $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-schemas $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-tables $RPM_BUILD_ROOT/usr/bin
-install -m 0755 src/my-drop-all-users $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-drop-all-triggers $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-drop-all-users $RPM_BUILD_ROOT/usr/bin
+install -m 0755 src/my-drop-all-views $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-fix-definer-events $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-fix-definer-routines $RPM_BUILD_ROOT/usr/bin
 install -m 0755 src/my-fix-definer-triggers $RPM_BUILD_ROOT/usr/bin
@@ -89,8 +91,9 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-drop-all-routines
 /usr/bin/my-drop-all-schemas
 /usr/bin/my-drop-all-tables
-/usr/bin/my-drop-all-users
 /usr/bin/my-drop-all-triggers
+/usr/bin/my-drop-all-users
+/usr/bin/my-drop-all-views
 /usr/bin/my-fix-definer-events
 /usr/bin/my-fix-definer-routines
 /usr/bin/my-fix-definer-triggers
@@ -110,6 +113,9 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Thu Jun 11 2026 Rodrigo Tassinari 1.5.16
+- New tool: my-drop-all-views
 
 * Wed Jun 10 2026 Rodrigo Tassinari 1.5.15
 - my-drop-all-tables: Do not require a schema (allow to choose all)
