@@ -1,5 +1,9 @@
 #!/bin/bash
 
+if [ "$DEBUG" == "1" ]; then
+   set -x
+fi
+
 function confirm()
 {
 	if [ $ANSWER_YES -eq 1 ]; then
@@ -13,11 +17,32 @@ function confirm()
 
 function generate_script()
 {
+	local IGNORE_CLAUSE=
+	local IGNORE_DB_LIST=
 	local SCRIPT=$1
+
+	local FIRST=1
+	local U
+	if [ -n "$IGNORE_LIST" ]; then
+		for U in $IGNORE_LIST; do
+			if [ $FIRST -eq 0 ]; then
+				IGNORE_DB_LIST="$IGNORE_DB_LIST, "
+			fi
+			IGNORE_DB_LIST="${IGNORE_DB_LIST}'${U}'"
+			FIRST=0
+		done
+	fi
+
+	if [ -n "$IGNORE_DB_LIST" ]; then
+		IGNORE_CLAUSE="user not in ($IGNORE_DB_LIST)"
+	fi
 
 	local FILTER="user <> '' and authentication_string <> '' and user <> 'root' and user not like 'mysql.%' and account_locked = 'N'"
 	if [ $AWS -eq 1 ]; then
 		FILTER="$FILTER and user not like 'AWS_%' and user <> 'admin' and user <> 'rdsadmin'"
+	fi
+	if [ -n "$IGNORE_CLAUSE" ]; then
+		FILTER="$FILTER and $IGNORE_CLAUSE"
 	fi
 
 	QUERY="select concat('alter user \"', user, '\"@\"', host, '\" account lock;') as command from mysql.user where $FILTER"
@@ -30,14 +55,17 @@ function run()
 	AWS=0
 	LOGIN_PATH=client
 	UNLOCK_SCRIPT=
+	IGNORE_LIST=
 
-	while getopts "Ahl:u:y" opt; do
+	while getopts "Ahi:l:u:y" opt; do
 		case $opt in
 			A)
 				AWS=1;;
 			h)
 				usage
 				return 0;;
+			i)
+				IGNORE_LIST="$OPTARG $IGNORE_LIST";;
 			l)
 				LOGIN_PATH=$OPTARG;;
 			u)
@@ -104,9 +132,10 @@ function run()
 function usage()
 {
 	echo "my-admin-tools: my-lock-all-users - Lock all users in a mysql instance"
-	echo "Usage: $0 -A [ -h ] [ -l <path> ] -u <file>"
+	echo "Usage: $0 -A [ -h ] [ -i <username> ] [ -l <path> ] -u <file>"
 	echo "   -A: Active AWS RDS mode (internal RDS accounts are ignored)"
 	echo "   -h: Display this help and exit"
+	echo "   -i: Ignore <username> (can be set more than once, for multiple users)"
 	echo "   -l: Use login path <path>"
 	echo "      Default: 'client'"
 	echo "   -u: Generate an unlock script and save it in <file>. Users that are locked before execution will not be unlocked."
