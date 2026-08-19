@@ -1,5 +1,5 @@
 Name:           my-admin-tools
-Version:			 1.5.17
+Version:			 1.5.18
 Release:        1
 Summary:        Administration tools for MySQL
 
@@ -113,6 +113,9 @@ install -m 0644 my-update-dirty-stats.conf.8.gz $RPM_BUILD_ROOT/usr/share/man/ma
 /usr/bin/my-val-mirror
 
 %changelog
+
+* Wed Aug 19 2026 Rodrigo Tassinari 1.5.18
+- my-lock-all-users - New option: ignore users
 
 * Thu Jun 11 2026 Rodrigo Tassinari 1.5.17
 - my-drop-all-tables: fix: temp files were not being removed
